@@ -1,0 +1,55 @@
+# Local environment configuration and credentials
+.env
+.env.*
+!.env.example
+**/secrets.json
+**/appsettings.Local.json
+**/appsettings.*.Local.json
+*.pfx
+*.p12
+*.pem
+*.key
+
+# .NET build and IDE output
+**/bin/
+**/obj/
+.vs/
+*.user
+*.suo
+*.sln.docstates
+*.nupkg
+*.snupkg
+
+# JavaScript dependencies and generated builds
+**/node_modules/
+**/dist/
+**/.vite/
+**/.cache/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Automated test output
+**/TestResults/
+**/coverage/
+**/playwright-report/
+**/test-results/
+**/blob-report/
+
+# Local database volumes, dumps, and provider captures
+.local/
+**/pgdata/
+*.dump
+*.backup
+
+# OS and editor state
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+
+# Keep dependency lockfiles and EF migrations tracked.
+# Tracked configuration files must contain placeholders only, never secrets.
