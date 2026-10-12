@@ -14,6 +14,29 @@ namespace SportStats.IntegrationTests;
 
 public sealed class ApiStartupTests
 {
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("Password=synthetic-secret;invalid-setting=synthetic-secret")]
+    [InlineData("Host=127.0.0.1;Port=1;Database=sportstats_dev;Username=sportstats_app;Password=synthetic-secret;Timeout=1")]
+    public async Task HealthRemainsHealthyWithMissingMalformedOrUnreachableDatabaseConfiguration(string? connectionString)
+    {
+        using var factory = CreateFactory("SportStats tests").WithWebHostBuilder(builder =>
+            builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ConnectionStrings:SportStats"] = connectionString
+                })));
+        using var client = factory.CreateClient(ClientOptions());
+
+        using var response = await client.GetAsync("/health");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("Healthy", payload.RootElement.GetProperty("status").GetString());
+        Assert.Single(payload.RootElement.EnumerateObject());
+    }
+
     [Fact]
     public async Task HealthReturnsMinimalHealthyResponseWithoutExternalConfiguration()
     {

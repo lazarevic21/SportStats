@@ -6,6 +6,12 @@ SportStats is a football-first full-stack portfolio project, initially focused o
 
 Milestone 2.1 adds the .NET 10 backend solution, layer registration, configuration, health endpoint, and initial tests. See [backend setup](docs/backend-setup.md) for commands and scope. Phase 1 evidence remains documented in [the validation summary](docs/phase-01-summary.md).
 
+Milestone 2.2 adds platform and football domain entities, an Infrastructure-owned EF Core/Npgsql context, Fluent mappings, typed external identity mappings, and domain/model tests. Startup and `/health` remain database-independent. See [database model and unresolved decisions](docs/database.md). Standing aggregates remain deferred pending provider evidence. `20261012165516_InitialCreate` has been successfully applied locally to `sportstats_dev` using `sportstats_migrator`. User-reported verification confirms 12 application tables across `platform` and `football`, exactly one EF Core migration history entry, reviewed constraints and 36 indexes, a successful build, all 62 tests passing, and `git diff --check` passing.
+
+The historical [final pre-migration review](docs/pre-migration-review.md) records accepted model decisions and the earlier privilege-audit limitation. The historical [initial migration review](docs/initial-migration-review.md) records generation-stage artifacts, tooling, and verification. Their unapplied-state statements describe those earlier stages.
+
+The [application record and guarded instructions](docs/initial-migration-application.md) document successful local application, private password prompting, verification, and the UTF-8 BOM correction. The retained initial application workflow requires an approved empty target; do not rerun it against the populated local database.
+
 ## Planned technology stack
 
 - Backend: C# and ASP.NET Core Web API (.NET 10)
@@ -76,7 +82,7 @@ Only the Tech Lead coordinates commits, merges, and pushes. Confirmation is requ
 
 ## Local development
 
-Install the .NET SDK specified by `global.json`, then follow [backend setup](docs/backend-setup.md) to restore, build, test, and run the health endpoint. The current backend foundation is sport-neutral; football features, database integration, provider access, and authentication remain future work.
+Install the .NET SDK specified by `global.json`, then follow [backend setup](docs/backend-setup.md) to restore, build, test, and run the health endpoint. Follow [database documentation](docs/database.md) for secure persistence configuration, the applied migration state, and remaining provider decisions. Provider access, resource endpoints, and authentication remain future work.
 
 ## Longer-term roadmap
 
