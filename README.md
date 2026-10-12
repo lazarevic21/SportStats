@@ -4,11 +4,11 @@ SportStats is a football-first full-stack portfolio project, initially focused o
 
 ## Project status
 
-Phase 0: repository setup. Application implementation has not started. Phase 1 requires completion and approval of Phase 0.
+Milestone 2.1 adds the .NET 10 backend solution, layer registration, configuration, health endpoint, and initial tests. See [backend setup](docs/backend-setup.md) for commands and scope. Phase 1 evidence remains documented in [the validation summary](docs/phase-01-summary.md).
 
 ## Planned technology stack
 
-- Backend: C# and ASP.NET Core Web API
+- Backend: C# and ASP.NET Core Web API (.NET 10)
 - Frontend: React, TypeScript, and Vite
 - Database: PostgreSQL and Entity Framework Core
 - Authentication: ASP.NET Core Identity with JWT
@@ -76,7 +76,7 @@ Only the Tech Lead coordinates commits, merges, and pushes. Confirmation is requ
 
 ## Local development
 
-Setup and run commands will be documented when the application projects are implemented. There is no runnable application yet.
+Install the .NET SDK specified by `global.json`, then follow [backend setup](docs/backend-setup.md) to restore, build, test, and run the health endpoint. The current backend foundation is sport-neutral; football features, database integration, provider access, and authentication remain future work.
 
 ## Longer-term roadmap
 

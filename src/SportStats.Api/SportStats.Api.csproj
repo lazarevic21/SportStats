@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <UserSecretsId>SportStats-Api-local-development</UserSecretsId>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../SportStats.Application/SportStats.Application.csproj" />
+    <ProjectReference Include="../SportStats.Infrastructure/SportStats.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>
