@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using SportStats.Application.Football.Ingestion;
 using SportStats.Infrastructure.Configuration;
+using SportStats.Infrastructure.FootballData;
 using SportStats.Infrastructure.Persistence;
 
 namespace SportStats.Infrastructure;
@@ -14,6 +16,7 @@ public static class DependencyInjection
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
+        services.AddSingleton<IFootballPayloadNormalizer, FootballDataNormalizer>();
         return services.AddSportStatsDbContext<SportStatsDbContext>(configuration);
     }
 

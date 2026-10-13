@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 using SportStats.Api.Configuration;
 using Xunit;
 
@@ -18,7 +19,7 @@ public sealed class ApiStartupTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("Password=synthetic-secret;invalid-setting=synthetic-secret")]
-    [InlineData("Host=127.0.0.1;Port=1;Database=sportstats_dev;Username=sportstats_app;Password=synthetic-secret;Timeout=1")]
+    [InlineData("Host=127.0.0.1;Port=1;Database=sportstats_test;Username=sportstats_app;Password=synthetic-secret;Timeout=1")]
     public async Task HealthRemainsHealthyWithMissingMalformedOrUnreachableDatabaseConfiguration(string? connectionString)
     {
         using var factory = CreateFactory("SportStats tests").WithWebHostBuilder(builder =>
@@ -51,7 +52,46 @@ public sealed class ApiStartupTests
         Assert.Equal("Healthy", payload.RootElement.GetProperty("status").GetString());
         Assert.Single(payload.RootElement.EnumerateObject());
         Assert.False(response.Headers.Contains("Server"));
+        Assert.Null(factory.Services.GetRequiredService<IConfiguration>().GetConnectionString("SportStats"));
         Assert.Equal("SportStats tests", factory.Services.GetRequiredService<IOptions<ApiOptions>>().Value.ServiceName);
+    }
+
+    [Theory]
+    [InlineData("Production")]
+    [InlineData("Development")]
+    public void DefaultFactoryClearsInheritedDatabaseConfiguration(string environment)
+    {
+        using var factory = CreateFactory("SportStats tests").WithWebHostBuilder(builder =>
+            builder.UseEnvironment(environment));
+        using var client = factory.CreateClient(ClientOptions());
+        Assert.Null(factory.Services.GetRequiredService<IConfiguration>().GetConnectionString("SportStats"));
+    }
+
+    [Theory]
+    [InlineData("Production")]
+    [InlineData("Development")]
+    public void FactoryMasksDeliberatelyInheritedSyntheticDatabaseSetting(string environment)
+    {
+        using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment(environment);
+            builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ConnectionStrings:SportStats"] = "synthetic-inherited-value-not-a-connection-string"
+                }));
+        }).WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, configuration) =>
+            {
+                var syntheticValueIsInherited = string.Equals(configuration.Build().GetConnectionString("SportStats"),
+                    "synthetic-inherited-value-not-a-connection-string", StringComparison.Ordinal);
+                Assert.True(syntheticValueIsInherited, "The synthetic inherited setting must exist before isolation.");
+            });
+            ConfigureIsolatedHost(builder);
+        });
+        using var client = factory.CreateClient(ClientOptions());
+        Assert.Null(factory.Services.GetRequiredService<IConfiguration>().GetConnectionString("SportStats"));
     }
 
     [Theory]
@@ -116,12 +156,23 @@ public sealed class ApiStartupTests
         new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.UseEnvironment("Production");
+            ConfigureIsolatedHost(builder);
             builder.ConfigureAppConfiguration((_, configuration) =>
                 configuration.AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["Api:ServiceName"] = serviceName
                 }));
         });
+
+    private static void ConfigureIsolatedHost(IWebHostBuilder builder)
+    {
+        builder.ConfigureLogging(logging => logging.ClearProviders());
+        builder.ConfigureAppConfiguration((_, configuration) =>
+            configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SportStats"] = null
+            }));
+    }
 
     private static WebApplicationFactoryClientOptions ClientOptions() => new()
     {

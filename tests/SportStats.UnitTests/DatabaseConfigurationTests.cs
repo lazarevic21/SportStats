@@ -16,11 +16,11 @@ public sealed class DatabaseConfigurationTests
     [InlineData("   ")]
     [InlineData("Password=synthetic-secret;invalid-setting=synthetic-secret")]
     [InlineData("Host=localhost;Username=sportstats_app;Password=synthetic-secret")]
-    [InlineData("Database=sportstats_dev;Username=sportstats_app;Password=synthetic-secret")]
-    [InlineData("Host=localhost;Database=sportstats_dev;Password=synthetic-secret")]
-    [InlineData("Host=localhost;Database=sportstats_dev;Username=sportstats_app;Port=synthetic-secret")]
-    [InlineData("Host=localhost;Database=sportstats_dev;Username=sportstats_app;Port=999999999999999999999;Password=synthetic-secret")]
-    [InlineData("Host=localhost;Database=sportstats_dev;Username=sportstats_app;Include Error Detail=synthetic-secret")]
+    [InlineData("Database=sportstats_test;Username=sportstats_app;Password=synthetic-secret")]
+    [InlineData("Host=localhost;Database=sportstats_test;Password=synthetic-secret")]
+    [InlineData("Host=localhost;Database=sportstats_test;Username=sportstats_app;Port=synthetic-secret")]
+    [InlineData("Host=localhost;Database=sportstats_test;Username=sportstats_app;Port=999999999999999999999;Password=synthetic-secret")]
+    [InlineData("Host=localhost;Database=sportstats_test;Username=sportstats_app;Include Error Detail=synthetic-secret")]
     public void InvalidConfigurationFailsOnlyWhenContextIsResolvedWithoutExposingInput(string? connectionString)
     {
         using var provider = CreateProvider(connectionString);
@@ -37,7 +37,7 @@ public sealed class DatabaseConfigurationTests
     [Fact]
     public void ValidConfigurationDisablesSensitiveDiagnosticsWithoutConnecting()
     {
-        const string connectionString = "Host=127.0.0.1;Port=1;Database=sportstats_dev;Username=sportstats_app;Password=synthetic-secret;Include Error Detail=true;Log Parameters=true;Persist Security Info=true";
+        const string connectionString = "Host=127.0.0.1;Port=1;Database=sportstats_test;Username=sportstats_app;Password=synthetic-secret;Include Error Detail=true;Log Parameters=true;Persist Security Info=true";
         using var provider = CreateProvider(connectionString);
         using var scope = provider.CreateScope();
         var context = scope.ServiceProvider.GetRequiredService<TestDbContext>();
