@@ -50,6 +50,7 @@ public sealed class AdvisoryLockKeys
     public long Sport(string code) => Derive("natural", "sport", NaturalText(code));
     public long Competition(Guid sportId, string code) => Derive("natural", "competition", ParentId(sportId), NaturalText(code));
     public long Season(Guid competitionId, string key) => Derive("natural", "season", ParentId(competitionId), NaturalText(key));
+    public long SeasonTeam(Guid seasonId, Guid teamId) => Derive("natural", "season-team", ParentId(seasonId), ParentId(teamId));
 
     private static string NaturalText(string value)
     {
@@ -81,7 +82,10 @@ public sealed class AdvisoryLockKeys
 }
 
 /// <summary>
-/// Immutable snapshot of a complete football lock set. Hash collisions only serialize unrelated
+/// Immutable snapshot of coordination plus the individually addressable football lock set.
+/// Identity-resolution plans separately list symbolic season/membership natural keys whose parent
+/// IDs do not exist yet: those keys rely on coordination through caller transaction completion.
+/// Hash collisions only serialize unrelated
 /// work: they never identify entities. A data key colliding with coordination is already covered.
 /// All cooperating writers must follow this order before reading or changing protected data.
 /// </summary>

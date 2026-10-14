@@ -2,13 +2,96 @@ using System.Data;
 using Npgsql;
 using NpgsqlTypes;
 using SportStats.Infrastructure.Persistence.AdvisoryLocks;
+using SportStats.Infrastructure.Persistence.IdentityResolution;
+using SportStats.Application.Football.IdentityResolution;
 using Xunit;
 
 namespace SportStats.UnitTests;
 
 public sealed class PostgreSqlAdvisoryLockAcquirerTests
 {
+    [Fact]
+    public async Task ExistingAcquisitionDeadlineCancelsSynchronousPlanning()
+    {
+        var session = new RecordingSession();
+        await Assert.ThrowsAsync<TimeoutException>(() => PostgreSqlAdvisoryLockAcquirer.AcquireDiscoveredAsync(
+            session, 99, async token =>
+            {
+                await Task.Yield();
+                var data = new FootballDiscovery([], [], [], [], [], [], new DeadlineMappings(token));
+                var result = new FootballResolutionPlanner().Plan(new IdentityResolutionBatch([], [], [], []), data, token);
+                return result.Plan!.IndividualDataLocks;
+            }, TimeSpan.FromMilliseconds(30), default));
+        Assert.Equal(new long[] { 99 }, session.Acquired);
+        Assert.DoesNotContain("timeout:150ms", session.Events);
+    }
+
+    private sealed class DeadlineMappings(CancellationToken token) : IReadOnlyList<DiscoveredMapping>
+    {
+        public int Count => 0;
+        public DiscoveredMapping this[int index] => throw new ArgumentOutOfRangeException(nameof(index));
+        public IEnumerator<DiscoveredMapping> GetEnumerator()
+        {
+            var guard = System.Diagnostics.Stopwatch.StartNew();
+            while (guard.Elapsed < TimeSpan.FromSeconds(5))
+            {
+                token.ThrowIfCancellationRequested();
+                Thread.Yield();
+            }
+            throw new InvalidOperationException("Acquisition deadline did not reach planning.");
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(5);
+
+    [Fact]
+    public async Task DiscoveryRunsAfterCoordinationBeforeOrderedDataLocks()
+    {
+        var session = new RecordingSession();
+        await PostgreSqlAdvisoryLockAcquirer.AcquireDiscoveredAsync(session, 99, token =>
+        {
+            Assert.Equal(new long[] { 99 }, session.Acquired);
+            Assert.True(token.CanBeCanceled);
+            session.Events.Add("discover");
+            return Task.FromResult(new FootballAdvisoryLockPlan([7, -5, 7], 99));
+        }, Wait, default);
+        Assert.Equal(new[] { "read-timeout", "timeout:5000ms", "lock:99", "discover", "lock:-5", "lock:7", "timeout:150ms" }, session.Events);
+    }
+
+    [Fact]
+    public async Task DiscoveryFailureStopsBeforeDataLocksAndSqlCleanup()
+    {
+        var session = new RecordingSession();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            PostgreSqlAdvisoryLockAcquirer.AcquireDiscoveredAsync(session, 99,
+                _ => throw new InvalidOperationException("Discovery failed."), Wait, default));
+        Assert.Equal(new long[] { 99 }, session.Acquired);
+        Assert.DoesNotContain("timeout:150ms", session.Events);
+    }
+
+    [Fact]
+    public async Task DiscoverySharesAcquisitionDeadline()
+    {
+        var session = new RecordingSession();
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            PostgreSqlAdvisoryLockAcquirer.AcquireDiscoveredAsync(session, 99, async token =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return new FootballAdvisoryLockPlan([7], 99);
+            }, TimeSpan.FromMilliseconds(25), default));
+        Assert.Equal(new long[] { 99 }, session.Acquired);
+        Assert.DoesNotContain("timeout:150ms", session.Events);
+    }
+
+    [Fact]
+    public async Task DiscoveryCannotChangeCoordinationKey()
+    {
+        var session = new RecordingSession();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            PostgreSqlAdvisoryLockAcquirer.AcquireDiscoveredAsync(session, 99,
+                _ => Task.FromResult(new FootballAdvisoryLockPlan([7], 100)), Wait, default));
+        Assert.Equal(new long[] { 99 }, session.Acquired);
+    }
 
     [Fact]
     public async Task AcquisitionUsesCoordinationFirstSignedOrderAndRestoresPriorTimeout()

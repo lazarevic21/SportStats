@@ -15,6 +15,23 @@ public sealed class AdvisoryLockKeyTests
     private static ProviderIdentity Identity => new("Provider", "Scope ", "001");
 
     [Fact]
+    public void SeasonTeamKeyHasStableOrderedParentComponents()
+    {
+        var team = Guid.Parse("11223344-5566-7788-99aa-bbccddeeff00");
+        Assert.Equal(6961974173478281512L, keys.SeasonTeam(Parent, team));
+        Assert.NotEqual(keys.SeasonTeam(Parent, team), keys.SeasonTeam(team, Parent));
+        Assert.Throws<ArgumentException>(() => keys.SeasonTeam(Guid.Empty, team));
+        Assert.Throws<ArgumentException>(() => keys.SeasonTeam(Parent, Guid.Empty));
+        var original = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("tr-TR");
+            Assert.Equal(6961974173478281512L, keys.SeasonTeam(Parent, team));
+        }
+        finally { CultureInfo.CurrentCulture = original; }
+    }
+
+    [Fact]
     public void VersionOneVectorsAreStable()
     {
         // Independently computed from the specified framing with PowerShell SHA256/BitConverter.

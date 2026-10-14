@@ -32,8 +32,35 @@ public sealed class PostgreSqlAdvisoryLockAcquirer
     internal static async Task AcquireAsync(IAdvisoryLockSession session, FootballAdvisoryLockPlan plan,
         TimeSpan maxWait, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(plan);
+        await AcquireDiscoveredAsync(session, plan.CoordinationKey, _ => Task.FromResult(plan), maxWait, cancellationToken);
+    }
+
+    // Discovery runs under coordination and the same bounded acquisition deadline.
+    // A failed planning result can return an empty data-lock plan; it never authorizes writes.
+    // Discovery, including synchronous planning, must observe the supplied deadline token.
+    // Coordination is transaction-scoped and acquired before the resolver savepoint. Savepoint
+    // cleanup cannot release it; its owner must complete the transaction to release protection
+    // of symbolic season/membership natural keys. No executor may reuse a plan in another transaction.
+    internal Task AcquireDiscoveredAsync(NpgsqlTransaction transaction,
+        Func<CancellationToken, Task<FootballAdvisoryLockPlan>> discover,
+        TimeSpan maxWait, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(transaction);
+        ValidateWait(maxWait);
+        var connection = transaction.Connection;
+        if (connection is null || connection.State != ConnectionState.Open)
+            throw new InvalidOperationException("An active transaction on an open PostgreSQL connection is required.");
+        return AcquireDiscoveredAsync(new NpgsqlLockSession(connection, transaction, maxWait),
+            new AdvisoryLockKeys().FootballCoordination(), discover, maxWait, cancellationToken);
+    }
+
+    internal static async Task AcquireDiscoveredAsync(IAdvisoryLockSession session, long coordinationKey,
+        Func<CancellationToken, Task<FootballAdvisoryLockPlan>> discover,
+        TimeSpan maxWait, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(discover);
         ValidateWait(maxWait);
         cancellationToken.ThrowIfCancellationRequested();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -44,7 +71,10 @@ public sealed class PostgreSqlAdvisoryLockAcquirer
             var previousTimeout = await session.GetLockTimeoutAsync(token);
             var milliseconds = checked((int)Math.Ceiling(maxWait.TotalMilliseconds));
             await session.SetLockTimeoutAsync(milliseconds.ToString(CultureInfo.InvariantCulture) + "ms", token);
-            await session.AcquireLockAsync(plan.CoordinationKey, token);
+            await session.AcquireLockAsync(coordinationKey, token);
+            var plan = await discover(token);
+            if (plan.CoordinationKey != coordinationKey)
+                throw new InvalidOperationException("Discovery changed the coordination lock key.");
             foreach (var key in plan.OrderedKeys)
             {
                 token.ThrowIfCancellationRequested();

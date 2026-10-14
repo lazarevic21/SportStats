@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Storage;
 using System.Data;
 using System.Data.Common;
 using System.Linq.Expressions;
@@ -12,17 +13,18 @@ namespace SportStats.IntegrationTests;
 /// Explicitly opened by database tests only; never registered as a startup-test fixture.
 /// Does not create databases, migrate, alter schemas, or clean up committed data.
 /// </summary>
-public sealed class PostgreSqlTestDatabaseFixture : IAsyncDisposable
+public sealed partial class PostgreSqlTestDatabaseFixture : IAsyncDisposable
 {
     private readonly NpgsqlConnection connection;
     private readonly SportStatsDbContext context;
     private readonly string originalConnectionString;
+    private readonly CompetitionScenarioInterceptor scenarioInterceptor = new();
 
     private PostgreSqlTestDatabaseFixture(NpgsqlConnection connection)
     {
         this.connection = connection;
         originalConnectionString = connection.ConnectionString;
-        context = new SportStatsDbContext(CreateOptions(connection));
+        context = new SportStatsDbContext(CreateScenarioOptions(connection, scenarioInterceptor));
     }
 
     // Never return a context, IQueryable, connection, command, or transaction.
@@ -44,12 +46,14 @@ public sealed class PostgreSqlTestDatabaseFixture : IAsyncDisposable
 
     private async Task VerifyOwnedSessionAsync(CancellationToken cancellationToken)
     {
+        if (unusable) throw new InvalidOperationException("The PostgreSQL test fixture is unusable after cleanup failure.");
         RequireUnchangedOpenSession(connection, originalConnectionString);
-        await using var command = new NpgsqlCommand("SELECT current_database(), current_user", connection);
+        await using var command = new NpgsqlCommand(ServerIdentitySql, connection,
+            context.Database.CurrentTransaction?.GetDbTransaction() as NpgsqlTransaction);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
             throw new InvalidOperationException("Test database identity verification failed.");
-        VerifyServerIdentity(reader.GetString(0), reader.GetString(1));
+        VerifyRestrictedServerIdentity(reader);
     }
 
     internal static void RequireUnchangedOpenSession(NpgsqlConnection connection, string originalConnectionString)
@@ -67,11 +71,11 @@ public sealed class PostgreSqlTestDatabaseFixture : IAsyncDisposable
         try
         {
             await connection.OpenAsync(cancellationToken);
-            await using var command = new NpgsqlCommand("SELECT current_database(), current_user", connection);
+            await using var command = new NpgsqlCommand(ServerIdentitySql, connection);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             if (!await reader.ReadAsync(cancellationToken))
                 throw new InvalidOperationException("Test database identity verification failed.");
-            VerifyServerIdentity(reader.GetString(0), reader.GetString(1));
+            VerifyRestrictedServerIdentity(reader);
             return new PostgreSqlTestDatabaseFixture(connection);
         }
         catch (OperationCanceledException)
@@ -119,9 +123,13 @@ public sealed class PostgreSqlTestDatabaseFixture : IAsyncDisposable
     }
 
     private static DbContextOptions<SportStatsDbContext> CreateOptions(NpgsqlConnection connection) =>
+        CreateScenarioOptions(connection, null);
+
+    private static DbContextOptions<SportStatsDbContext> CreateScenarioOptions(NpgsqlConnection connection,
+        CompetitionScenarioInterceptor? scenario) =>
         new DbContextOptionsBuilder<SportStatsDbContext>()
-            .UseNpgsql(connection)
-            .AddInterceptors(new RefuseReopeningInterceptor())
+            .UseNpgsql(connection, postgres => postgres.MaxBatchSize(1))
+            .AddInterceptors(new RefuseReopeningInterceptor(), new NeverCommitInterceptor(), scenario ?? new CompetitionScenarioInterceptor())
             .EnableSensitiveDataLogging(false)
             .EnableDetailedErrors(false)
             .Options;
