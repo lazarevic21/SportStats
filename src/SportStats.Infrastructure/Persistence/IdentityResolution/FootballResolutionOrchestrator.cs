@@ -13,7 +13,7 @@ internal abstract record FootballResolutionOrchestrationResult
     internal sealed record Failed(IdentityResolutionFailure Failure) : FootballResolutionOrchestrationResult;
 }
 
-/// <summary>Shared orchestration with narrowly scoped competition, season and team persistence entry points.
+/// <summary>Shared orchestration with narrowly scoped competition, season, team and match persistence entry points.
 /// ExecuteAsync remains read-only and discards allocations. Persistence always runs
 /// its own locked preparation/revalidation in one shell call; it never accepts an externally
 /// prepared plan. Persisted results remain provisional until the caller commits.</summary>
@@ -25,15 +25,17 @@ internal sealed class FootballResolutionOrchestrator
     private readonly ICompetitionPersistenceSession? competitionPersistence;
     private readonly ISeasonPersistenceSession? seasonPersistence;
     private readonly ITeamPersistenceSession? teamPersistence;
+    private readonly IMatchPersistenceSession? matchPersistence;
 
     public FootballResolutionOrchestrator(SportStatsDbContext context, TimeSpan maxLockWait)
         : this(new FootballResolutionTransaction(context), new EfFootballResolutionPreparationSession(context, maxLockWait),
             new FootballIdentityMaterializer(), new EfCompetitionPersistenceSession(context), new EfSeasonPersistenceSession(context),
-            new EfTeamPersistenceSession(context)) { }
+            new EfTeamPersistenceSession(context), new EfMatchPersistenceSession(context)) { }
 
     internal FootballResolutionOrchestrator(FootballResolutionTransaction shell, IFootballResolutionPreparationSession session,
         FootballIdentityMaterializer materializer, ICompetitionPersistenceSession? competitionPersistence = null,
-        ISeasonPersistenceSession? seasonPersistence = null, ITeamPersistenceSession? teamPersistence = null)
+        ISeasonPersistenceSession? seasonPersistence = null, ITeamPersistenceSession? teamPersistence = null,
+        IMatchPersistenceSession? matchPersistence = null)
     {
         ArgumentNullException.ThrowIfNull(shell);
         ArgumentNullException.ThrowIfNull(session);
@@ -44,6 +46,7 @@ internal sealed class FootballResolutionOrchestrator
         this.competitionPersistence = competitionPersistence;
         this.seasonPersistence = seasonPersistence;
         this.teamPersistence = teamPersistence;
+        this.matchPersistence = matchPersistence;
     }
 
     internal Task<FootballResolutionOrchestrationResult> ExecuteAsync(IdentityResolutionBatch batch, CancellationToken token = default)
@@ -67,10 +70,15 @@ internal sealed class FootballResolutionOrchestrator
             failure => new IdentityResolutionBatchResult.Failed(failure),
             result => result is IdentityResolutionBatchResult.Resolved, false, token, teamOnly: true);
 
+    internal Task<IdentityResolutionBatchResult> PersistMatchesAsync(IdentityResolutionBatch batch, CancellationToken token = default)
+        => ExecuteCoreAsync<IdentityResolutionBatchResult>(batch, PersistMatchesWithinOperationAsync,
+            failure => new IdentityResolutionBatchResult.Failed(failure),
+            result => result is IdentityResolutionBatchResult.Resolved, false, token, matchOnly: true);
+
     private async Task<TResult> ExecuteCoreAsync<TResult>(IdentityResolutionBatch batch,
         Func<ValidatedFootballResolutionInput, FootballIdentityMaterialization, CancellationToken, Task<TResult>> operation,
         Func<IdentityResolutionFailure, TResult> failed, Func<TResult, bool> successful, bool competitionOnly, CancellationToken token,
-        bool seasonOnly = false, bool teamOnly = false)
+        bool seasonOnly = false, bool teamOnly = false, bool matchOnly = false)
     {
         // Input must be owned and validated before inspecting the caller transaction or issuing SQL.
         var (snapshot, invalid) = FootballResolutionPlanner.SnapshotAndValidate(batch, token);
@@ -99,6 +107,14 @@ internal sealed class FootballResolutionOrchestrator
                 return failed(new(IdentityResolutionFailureCode.InvalidInput, unsupported, "Only team requests are supported by this persistence entry point."));
             if (teamPersistence is null) throw new InvalidOperationException("Team persistence is not configured.");
         }
+        if (matchOnly)
+        {
+            var input = snapshot!.Input;
+            var unsupported = input.Competitions.Count > 0 ? "Competitions" : input.Seasons.Count > 0 ? "Seasons" : input.Teams.Count > 0 ? "Teams" : null;
+            if (unsupported is not null)
+                return failed(new(IdentityResolutionFailureCode.InvalidInput, unsupported, "Only match requests are supported by this persistence entry point."));
+            if (matchPersistence is null) throw new InvalidOperationException("Match persistence is not configured.");
+        }
         FootballPlanningResult? original = null;
         return await shell.ExecuteAsync<TResult>(async operationToken =>
         {
@@ -107,12 +123,98 @@ internal sealed class FootballResolutionOrchestrator
             if (refreshed.Failure is not null) return failed(refreshed.Failure);
             if (!FootballResolutionPlanComparison.Equivalent(original.Plan!, refreshed.Plan!, operationToken))
                 throw new InvalidOperationException("The locked identity resolution plan changed before materialization.");
+            if (matchOnly)
+            {
+                // Match requests include implicit season resolutions. Never allocate or write parents here.
+                for (var i = 0; i < refreshed.Plan!.Matches.Count; i++)
+                {
+                    operationToken.ThrowIfCancellationRequested();
+                    var match = refreshed.Plan.Matches[i];
+                    var missing = match.Parent?.ExistingId is null ? "Match.Season"
+                        : match.Home?.ExistingId is null ? "Match.HomeTeam"
+                        : match.Away?.ExistingId is null ? "Match.AwayTeam" : null;
+                    if (missing is not null)
+                        return failed(new(IdentityResolutionFailureCode.MissingReference, $"Matches[{i}].{missing}", "Match persistence requires existing dependencies."));
+                }
+            }
             var identities = materializer.Materialize(refreshed.Plan!, operationToken);
             var result = await operation(snapshot!, identities, operationToken);
             operationToken.ThrowIfCancellationRequested();
             return result;
         }, successful,
             async acquisitionToken => { original = await FootballResolutionDiscovery.PlanAndLockAsync(snapshot!, session, acquisitionToken); }, token);
+    }
+
+    // Private continuation: only reachable after this call's locked revalidation/materialization.
+    private async Task<IdentityResolutionBatchResult> PersistMatchesWithinOperationAsync(
+        ValidatedFootballResolutionInput snapshot, FootballIdentityMaterialization identities, CancellationToken token)
+    {
+        var persistence = matchPersistence!;
+        var seasons = new Dictionary<Guid, Season>();
+        var memberships = new Dictionary<(Guid SeasonId, Guid TeamId), FootballSeasonTeam>();
+        var matches = new Dictionary<Guid, FootballMatch>();
+        var results = new List<IdentityResolutionResult<FootballMatch>.Resolved>();
+        for (var i = 0; i < snapshot.Input.Matches.Count; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            var request = snapshot.Input.Matches[i].Match;
+            var identity = identities.Matches[i];
+            results.Add(new(identity.Entity.Id, identity.Identity,
+                identity.Entity.IsNew ? IdentityResolutionDisposition.CreatedEntity : IdentityResolutionDisposition.ExistingMapping));
+            if (!identity.Entity.IsNew || matches.ContainsKey(identity.Entity.Id)) continue;
+            var parent = identity.Parent!;
+            var home = identity.Home!;
+            var away = identity.Away!;
+            if (parent.IsNew || home.IsNew || away.IsNew)
+                throw new InvalidOperationException("Match persistence requires existing dependencies.");
+            if (home.Id == away.Id)
+                return new IdentityResolutionBatchResult.Failed(new(IdentityResolutionFailureCode.RelationshipConflict,
+                    $"Matches[{i}].Match.AwayTeam", "Home and away teams must differ."));
+            if (!seasons.TryGetValue(parent.Id, out var season))
+            {
+                season = await persistence.LoadSeasonAsync(parent.Id, token);
+                if (season is null)
+                    return new IdentityResolutionBatchResult.Failed(new(IdentityResolutionFailureCode.MissingReference,
+                        $"Matches[{i}].Match.Season", "The required season is unavailable."));
+                var competition = identities.Seasons.First(s => s.Entity.Id == parent.Id).Parent!;
+                if (season.Id != parent.Id || season.Key != request.Season.Key || season.CompetitionId != competition.Id ||
+                    season.Competition?.Id != competition.Id || season.Competition.Code != "PL" || season.Competition.Sport?.Code != "football")
+                    return new IdentityResolutionBatchResult.Failed(new(IdentityResolutionFailureCode.RelationshipConflict,
+                        $"Matches[{i}].Match.Season", "The season does not match the resolved football parent."));
+                seasons.Add(parent.Id, season);
+            }
+            foreach (var (team, field) in new[] { (home, "HomeTeam"), (away, "AwayTeam") })
+            {
+                token.ThrowIfCancellationRequested();
+                var key = (parent.Id, team.Id);
+                if (memberships.ContainsKey(key)) continue;
+                var membership = await persistence.LoadMembershipAsync(parent.Id, team.Id, token);
+                if (membership is null)
+                    return new IdentityResolutionBatchResult.Failed(new(IdentityResolutionFailureCode.MissingReference,
+                        $"Matches[{i}].Match.{field}", "The required season membership is unavailable."));
+                if (membership.SeasonId != parent.Id || membership.TeamId != team.Id || membership.Team?.Id != team.Id)
+                    return new IdentityResolutionBatchResult.Failed(new(IdentityResolutionFailureCode.RelationshipConflict,
+                        $"Matches[{i}].Match.{field}", "The membership does not match the resolved season and team."));
+                memberships.Add(key, membership);
+            }
+            matches.Add(identity.Entity.Id, new FootballMatch(identity.Entity.Id, season,
+                memberships[(parent.Id, home.Id)], memberships[(parent.Id, away.Id)], request.KickoffUtc,
+                request.Status, request.Matchday, new FootballScore(request.HomeGoals.Value, request.AwayGoals.Value)));
+        }
+        // Validate and construct the entire batch before staging any writes.
+        foreach (var match in matches.Values) { token.ThrowIfCancellationRequested(); persistence.StageMatch(match); }
+        foreach (var mapping in identities.NewMappings)
+        {
+            token.ThrowIfCancellationRequested();
+            if (mapping.Kind != IdentityLockEntity.FootballMatch || !matches.ContainsKey(mapping.EntityId))
+                throw new InvalidOperationException("Match materialization contains an incompatible mapping.");
+            persistence.StageMapping(new FootballMatchExternalIdentity(mapping.Id, mapping.Identity.ProviderKey,
+                mapping.Identity.IdentityScope, mapping.Identity.ExternalId, mapping.EntityId));
+        }
+        token.ThrowIfCancellationRequested();
+        if (matches.Count > 0) await persistence.SaveChangesAsync(token);
+        token.ThrowIfCancellationRequested();
+        return new IdentityResolutionBatchResult.Resolved([], [], [], results.AsReadOnly());
     }
 
     // Private continuation: only reachable after this call's locked revalidation/materialization.
