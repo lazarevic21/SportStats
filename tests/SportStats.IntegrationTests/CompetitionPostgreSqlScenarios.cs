@@ -168,6 +168,7 @@ public sealed partial class PostgreSqlTestDatabaseFixture
     }
 
     private sealed class InjectedCompetitionMappingFailure : Exception { }
+    private sealed class InjectedSeasonMappingFailure : Exception { }
     private sealed class NeverCommitInterceptor : DbTransactionInterceptor
     {
         public override InterceptionResult TransactionCommitting(DbTransaction transaction, TransactionEventData eventData, InterceptionResult result)
@@ -184,13 +185,21 @@ public sealed partial class PostgreSqlTestDatabaseFixture
         private Func<Task>? verify;
         private bool observing;
         private bool inject;
+        private bool seasonMode;
+        private CancellationTokenSource? seasonCancellation;
         public bool EarlierInsertObserved { get; private set; }
         public HashSet<Guid> InsertedCompetitionIds { get; } = [];
+        public HashSet<Guid> InsertedSeasonIds { get; } = [];
+        public int SeasonWriteCount { get; private set; }
         public void Activate(DbConnection connection, DbTransaction transaction, Func<Task> verification)
-        { ownedConnection = connection; ownedTransaction = transaction; verify = verification; }
-        public void Deactivate() { ownedConnection = null; ownedTransaction = null; verify = null; observing = false; inject = false; }
+        { ownedConnection = connection; ownedTransaction = transaction; verify = verification; seasonMode = false; }
+        public void ActivateSeason(DbConnection connection, DbTransaction transaction, Func<Task> verification)
+        { Activate(connection, transaction, verification); seasonMode = true; }
+        public void Deactivate() { ownedConnection = null; ownedTransaction = null; verify = null; observing = false; inject = false; seasonMode = false; seasonCancellation = null; }
         public void ObserveResolution(bool failure)
         { observing = true; inject = failure; EarlierInsertObserved = false; InsertedCompetitionIds.Clear(); }
+        public void ObserveSeasonResolution(bool failure, CancellationTokenSource? cancellation = null)
+        { ObserveResolution(failure); seasonCancellation = cancellation; InsertedSeasonIds.Clear(); SeasonWriteCount = 0; }
         private static bool Insert(DbCommand command, string table) => command.CommandText.Replace("\"", "", StringComparison.Ordinal)
             .TrimStart().StartsWith("INSERT INTO platform." + table + " ", StringComparison.OrdinalIgnoreCase);
         private async Task GuardAsync(DbCommand command)
@@ -198,11 +207,20 @@ public sealed partial class PostgreSqlTestDatabaseFixture
             var sql = command.CommandText.TrimStart();
             if (sql.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) || sql.StartsWith("SAVEPOINT", StringComparison.OrdinalIgnoreCase) ||
                 sql.StartsWith("ROLLBACK TO", StringComparison.OrdinalIgnoreCase) || sql.StartsWith("RELEASE SAVEPOINT", StringComparison.OrdinalIgnoreCase)) return;
-            if (!(Insert(command, "competitions") || Insert(command, "competition_external_ids")) ||
+            if (!IsApprovedScenarioInsert(command.CommandText, seasonMode) ||
                 ownedTransaction is null || !ReferenceEquals(command.Transaction, ownedTransaction) ||
                 !ReferenceEquals(command.Connection, ownedConnection) || ownedTransaction.IsolationLevel != IsolationLevel.ReadCommitted || verify is null)
                 throw new InvalidOperationException("Fixture writes require the verified owned ReadCommitted transaction and approved tables.");
             await verify();
+            if (observing && seasonMode && Insert(command, "season_external_ids") && EarlierInsertObserved)
+            {
+                if (seasonCancellation is not null)
+                {
+                    seasonCancellation.Cancel();
+                    seasonCancellation.Token.ThrowIfCancellationRequested();
+                }
+                if (inject) throw new InjectedSeasonMappingFailure();
+            }
             if (observing && inject && Insert(command, "competition_external_ids") && EarlierInsertObserved)
                 throw new InjectedCompetitionMappingFailure();
         }
@@ -225,7 +243,22 @@ public sealed partial class PostgreSqlTestDatabaseFixture
                 foreach (var entry in eventData.Context!.ChangeTracker.Entries<Competition>())
                     if (entry.State == EntityState.Added) InsertedCompetitionIds.Add(entry.Entity.Id);
             }
+            if (observing && seasonMode && Insert(command, "seasons"))
+            {
+                EarlierInsertObserved = true;
+                foreach (var entry in eventData.Context!.ChangeTracker.Entries<SportStats.Domain.Platform.Season>())
+                    if (entry.State == EntityState.Added) InsertedSeasonIds.Add(entry.Entity.Id);
+            }
+            if (observing && seasonMode && (Insert(command, "seasons") || Insert(command, "season_external_ids"))) SeasonWriteCount++;
             return ValueTask.FromResult(result);
         }
+    }
+
+    internal static bool IsApprovedScenarioInsert(string commandText, bool seasonMode)
+    {
+        var sql = commandText.Replace("\"", "", StringComparison.Ordinal).TrimStart();
+        bool InsertTable(string table) => sql.StartsWith("INSERT INTO platform." + table + " ", StringComparison.OrdinalIgnoreCase);
+        return InsertTable("competitions") || InsertTable("competition_external_ids") ||
+            (seasonMode && (InsertTable("seasons") || InsertTable("season_external_ids")));
     }
 }

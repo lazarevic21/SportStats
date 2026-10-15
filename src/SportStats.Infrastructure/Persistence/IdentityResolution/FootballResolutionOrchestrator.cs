@@ -12,8 +12,8 @@ internal abstract record FootballResolutionOrchestrationResult
     internal sealed record Failed(IdentityResolutionFailure Failure) : FootballResolutionOrchestrationResult;
 }
 
-/// <summary>Shared orchestration with a narrowly scoped competition persistence entry point.
-/// ExecuteAsync remains read-only and discards allocations. PersistCompetitionsAsync always runs
+/// <summary>Shared orchestration with narrowly scoped competition and season persistence entry points.
+/// ExecuteAsync remains read-only and discards allocations. Persistence always runs
 /// its own locked preparation/revalidation in one shell call; it never accepts an externally
 /// prepared plan. Persisted results remain provisional until the caller commits.</summary>
 internal sealed class FootballResolutionOrchestrator
@@ -22,13 +22,15 @@ internal sealed class FootballResolutionOrchestrator
     private readonly IFootballResolutionPreparationSession session;
     private readonly FootballIdentityMaterializer materializer;
     private readonly ICompetitionPersistenceSession? competitionPersistence;
+    private readonly ISeasonPersistenceSession? seasonPersistence;
 
     public FootballResolutionOrchestrator(SportStatsDbContext context, TimeSpan maxLockWait)
         : this(new FootballResolutionTransaction(context), new EfFootballResolutionPreparationSession(context, maxLockWait),
-            new FootballIdentityMaterializer(), new EfCompetitionPersistenceSession(context)) { }
+            new FootballIdentityMaterializer(), new EfCompetitionPersistenceSession(context), new EfSeasonPersistenceSession(context)) { }
 
     internal FootballResolutionOrchestrator(FootballResolutionTransaction shell, IFootballResolutionPreparationSession session,
-        FootballIdentityMaterializer materializer, ICompetitionPersistenceSession? competitionPersistence = null)
+        FootballIdentityMaterializer materializer, ICompetitionPersistenceSession? competitionPersistence = null,
+        ISeasonPersistenceSession? seasonPersistence = null)
     {
         ArgumentNullException.ThrowIfNull(shell);
         ArgumentNullException.ThrowIfNull(session);
@@ -37,6 +39,7 @@ internal sealed class FootballResolutionOrchestrator
         this.session = session;
         this.materializer = materializer;
         this.competitionPersistence = competitionPersistence;
+        this.seasonPersistence = seasonPersistence;
     }
 
     internal Task<FootballResolutionOrchestrationResult> ExecuteAsync(IdentityResolutionBatch batch, CancellationToken token = default)
@@ -50,9 +53,15 @@ internal sealed class FootballResolutionOrchestrator
             failure => new IdentityResolutionBatchResult.Failed(failure),
             result => result is IdentityResolutionBatchResult.Resolved, true, token);
 
+    internal Task<IdentityResolutionBatchResult> PersistSeasonsAsync(IdentityResolutionBatch batch, CancellationToken token = default)
+        => ExecuteCoreAsync<IdentityResolutionBatchResult>(batch, PersistSeasonsWithinOperationAsync,
+            failure => new IdentityResolutionBatchResult.Failed(failure),
+            result => result is IdentityResolutionBatchResult.Resolved, false, token, seasonOnly: true);
+
     private async Task<TResult> ExecuteCoreAsync<TResult>(IdentityResolutionBatch batch,
         Func<ValidatedFootballResolutionInput, FootballIdentityMaterialization, CancellationToken, Task<TResult>> operation,
-        Func<IdentityResolutionFailure, TResult> failed, Func<TResult, bool> successful, bool competitionOnly, CancellationToken token)
+        Func<IdentityResolutionFailure, TResult> failed, Func<TResult, bool> successful, bool competitionOnly, CancellationToken token,
+        bool seasonOnly = false)
     {
         // Input must be owned and validated before inspecting the caller transaction or issuing SQL.
         var (snapshot, invalid) = FootballResolutionPlanner.SnapshotAndValidate(batch, token);
@@ -64,6 +73,14 @@ internal sealed class FootballResolutionOrchestrator
             if (unsupported is not null)
                 return failed(new(IdentityResolutionFailureCode.InvalidInput, unsupported, "Only competition requests are supported by this persistence entry point."));
             if (competitionPersistence is null) throw new InvalidOperationException("Competition persistence is not configured.");
+        }
+        if (seasonOnly)
+        {
+            var input = snapshot!.Input;
+            var unsupported = input.Competitions.Count > 0 ? "Competitions" : input.Teams.Count > 0 ? "Teams" : input.Matches.Count > 0 ? "Matches" : null;
+            if (unsupported is not null)
+                return failed(new(IdentityResolutionFailureCode.InvalidInput, unsupported, "Only season requests are supported by this persistence entry point."));
+            if (seasonPersistence is null) throw new InvalidOperationException("Season persistence is not configured.");
         }
         FootballPlanningResult? original = null;
         return await shell.ExecuteAsync<TResult>(async operationToken =>
@@ -79,6 +96,56 @@ internal sealed class FootballResolutionOrchestrator
             return result;
         }, successful,
             async acquisitionToken => { original = await FootballResolutionDiscovery.PlanAndLockAsync(snapshot!, session, acquisitionToken); }, token);
+    }
+
+    // Private continuation: only reachable after this call's locked revalidation/materialization.
+    private async Task<IdentityResolutionBatchResult> PersistSeasonsWithinOperationAsync(
+        ValidatedFootballResolutionInput snapshot, FootballIdentityMaterialization identities, CancellationToken token)
+    {
+        var persistence = seasonPersistence!;
+        var competitions = new Dictionary<Guid, Competition>();
+        var seasons = new Dictionary<Guid, Season>();
+        var results = new List<IdentityResolutionResult<Season>.Resolved>();
+        for (var i = 0; i < snapshot.Input.Seasons.Count; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            var request = snapshot.Input.Seasons[i];
+            var identity = identities.Seasons[i];
+            if (identity.Entity.IsNew && !seasons.ContainsKey(identity.Entity.Id))
+            {
+                var parent = identity.Parent ?? throw new InvalidOperationException("Season materialization requires a parent.");
+                if (parent.IsNew || parent.Kind != IdentityLockEntity.Competition)
+                    throw new InvalidOperationException("Season persistence requires an existing competition.");
+                if (!competitions.TryGetValue(parent.Id, out var competition))
+                {
+                    competition = await persistence.LoadCompetitionAsync(parent.Id, token);
+                    if (competition is null)
+                        return new IdentityResolutionBatchResult.Failed(new(IdentityResolutionFailureCode.MissingReference,
+                            $"Seasons[{i}].Competition", "The required competition is unavailable."));
+                    if (competition.Id != parent.Id || competition.Code != "PL")
+                        return new IdentityResolutionBatchResult.Failed(new(IdentityResolutionFailureCode.RelationshipConflict,
+                            $"Seasons[{i}].Competition", "The competition does not match the resolved parent."));
+                    competitions.Add(parent.Id, competition);
+                }
+                var season = new Season(identity.Entity.Id, competition, request.Season.Key, request.Season.StartDate, request.Season.EndDate);
+                seasons.Add(season.Id, season);
+            }
+            results.Add(new(identity.Entity.Id, identity.Identity,
+                identity.Entity.IsNew ? IdentityResolutionDisposition.CreatedEntity : IdentityResolutionDisposition.ExistingMapping));
+        }
+        foreach (var season in seasons.Values) { token.ThrowIfCancellationRequested(); persistence.StageSeason(season); }
+        foreach (var mapping in identities.NewMappings)
+        {
+            token.ThrowIfCancellationRequested();
+            if (mapping.Kind != IdentityLockEntity.Season || !seasons.ContainsKey(mapping.EntityId))
+                throw new InvalidOperationException("Season materialization contains an incompatible mapping.");
+            persistence.StageMapping(new SeasonExternalIdentity(mapping.Id, mapping.Identity.ProviderKey,
+                mapping.Identity.IdentityScope, mapping.Identity.ExternalId, mapping.EntityId));
+        }
+        token.ThrowIfCancellationRequested();
+        if (seasons.Count > 0 || identities.NewMappings.Count > 0) await persistence.SaveChangesAsync(token);
+        token.ThrowIfCancellationRequested();
+        return new IdentityResolutionBatchResult.Resolved([], results.AsReadOnly(), [], []);
     }
 
     // Private continuation: only reachable after this call's locked revalidation/materialization.
