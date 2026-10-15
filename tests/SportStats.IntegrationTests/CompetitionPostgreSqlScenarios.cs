@@ -169,6 +169,7 @@ public sealed partial class PostgreSqlTestDatabaseFixture
 
     private sealed class InjectedCompetitionMappingFailure : Exception { }
     private sealed class InjectedSeasonMappingFailure : Exception { }
+    private sealed class InjectedTeamMappingFailure : Exception { }
     private sealed class NeverCommitInterceptor : DbTransactionInterceptor
     {
         public override InterceptionResult TransactionCommitting(DbTransaction transaction, TransactionEventData eventData, InterceptionResult result)
@@ -186,32 +187,50 @@ public sealed partial class PostgreSqlTestDatabaseFixture
         private bool observing;
         private bool inject;
         private bool seasonMode;
+        private bool teamMode;
         private CancellationTokenSource? seasonCancellation;
         public bool EarlierInsertObserved { get; private set; }
         public HashSet<Guid> InsertedCompetitionIds { get; } = [];
         public HashSet<Guid> InsertedSeasonIds { get; } = [];
         public int SeasonWriteCount { get; private set; }
+        public HashSet<Guid> InsertedTeamIds { get; } = [];
+        public int TeamWriteCount { get; private set; }
         public void Activate(DbConnection connection, DbTransaction transaction, Func<Task> verification)
-        { ownedConnection = connection; ownedTransaction = transaction; verify = verification; seasonMode = false; }
+        { ownedConnection = connection; ownedTransaction = transaction; verify = verification; seasonMode = false; teamMode = false; }
         public void ActivateSeason(DbConnection connection, DbTransaction transaction, Func<Task> verification)
         { Activate(connection, transaction, verification); seasonMode = true; }
-        public void Deactivate() { ownedConnection = null; ownedTransaction = null; verify = null; observing = false; inject = false; seasonMode = false; seasonCancellation = null; }
+        public void ActivateTeam(DbConnection connection, DbTransaction transaction, Func<Task> verification)
+        { ActivateSeason(connection, transaction, verification); teamMode = true; }
+        public void Deactivate() { ownedConnection = null; ownedTransaction = null; verify = null; observing = false; inject = false; seasonMode = false; teamMode = false; seasonCancellation = null; }
         public void ObserveResolution(bool failure)
         { observing = true; inject = failure; EarlierInsertObserved = false; InsertedCompetitionIds.Clear(); }
         public void ObserveSeasonResolution(bool failure, CancellationTokenSource? cancellation = null)
         { ObserveResolution(failure); seasonCancellation = cancellation; InsertedSeasonIds.Clear(); SeasonWriteCount = 0; }
+        public void ObserveTeamResolution(bool failure, CancellationTokenSource? cancellation = null)
+        { ObserveSeasonResolution(failure, cancellation); InsertedTeamIds.Clear(); TeamWriteCount = 0; }
         private static bool Insert(DbCommand command, string table) => command.CommandText.Replace("\"", "", StringComparison.Ordinal)
             .TrimStart().StartsWith("INSERT INTO platform." + table + " ", StringComparison.OrdinalIgnoreCase);
+        private static bool TeamInsert(DbCommand command, string table) => command.CommandText.Replace("\"", "", StringComparison.Ordinal)
+            .TrimStart().StartsWith("INSERT INTO football." + table + " ", StringComparison.OrdinalIgnoreCase);
         private async Task GuardAsync(DbCommand command)
         {
             var sql = command.CommandText.TrimStart();
             if (sql.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) || sql.StartsWith("SAVEPOINT", StringComparison.OrdinalIgnoreCase) ||
                 sql.StartsWith("ROLLBACK TO", StringComparison.OrdinalIgnoreCase) || sql.StartsWith("RELEASE SAVEPOINT", StringComparison.OrdinalIgnoreCase)) return;
-            if (!IsApprovedScenarioInsert(command.CommandText, seasonMode) ||
+            if (!IsApprovedScenarioInsert(command.CommandText, seasonMode, teamMode) ||
                 ownedTransaction is null || !ReferenceEquals(command.Transaction, ownedTransaction) ||
                 !ReferenceEquals(command.Connection, ownedConnection) || ownedTransaction.IsolationLevel != IsolationLevel.ReadCommitted || verify is null)
                 throw new InvalidOperationException("Fixture writes require the verified owned ReadCommitted transaction and approved tables.");
             await verify();
+            if (observing && teamMode && (TeamInsert(command, "team_external_ids") || TeamInsert(command, "season_teams")) && EarlierInsertObserved)
+            {
+                if (seasonCancellation is not null)
+                {
+                    seasonCancellation.Cancel();
+                    seasonCancellation.Token.ThrowIfCancellationRequested();
+                }
+                if (inject) throw new InjectedTeamMappingFailure();
+            }
             if (observing && seasonMode && Insert(command, "season_external_ids") && EarlierInsertObserved)
             {
                 if (seasonCancellation is not null)
@@ -250,15 +269,35 @@ public sealed partial class PostgreSqlTestDatabaseFixture
                     if (entry.State == EntityState.Added) InsertedSeasonIds.Add(entry.Entity.Id);
             }
             if (observing && seasonMode && (Insert(command, "seasons") || Insert(command, "season_external_ids"))) SeasonWriteCount++;
+            ObserveTeamInsert(command, eventData.Context);
             return ValueTask.FromResult(result);
+        }
+        public override ValueTask<int> NonQueryExecutedAsync(DbCommand command, CommandExecutedEventData eventData,
+            int result, CancellationToken cancellationToken = default)
+        {
+            ObserveTeamInsert(command, eventData.Context);
+            return ValueTask.FromResult(result);
+        }
+        private void ObserveTeamInsert(DbCommand command, DbContext? context)
+        {
+            if (!observing || !teamMode) return;
+            if (TeamInsert(command, "teams"))
+            {
+                EarlierInsertObserved = true;
+                foreach (var entry in context!.ChangeTracker.Entries<SportStats.Domain.Football.FootballTeam>())
+                    if (entry.State == EntityState.Added) InsertedTeamIds.Add(entry.Entity.Id);
+            }
+            if (TeamInsert(command, "teams") || TeamInsert(command, "team_external_ids") || TeamInsert(command, "season_teams")) TeamWriteCount++;
         }
     }
 
-    internal static bool IsApprovedScenarioInsert(string commandText, bool seasonMode)
+    internal static bool IsApprovedScenarioInsert(string commandText, bool seasonMode, bool teamMode = false)
     {
         var sql = commandText.Replace("\"", "", StringComparison.Ordinal).TrimStart();
         bool InsertTable(string table) => sql.StartsWith("INSERT INTO platform." + table + " ", StringComparison.OrdinalIgnoreCase);
         return InsertTable("competitions") || InsertTable("competition_external_ids") ||
-            (seasonMode && (InsertTable("seasons") || InsertTable("season_external_ids")));
+            (seasonMode && (InsertTable("seasons") || InsertTable("season_external_ids"))) ||
+            (teamMode && new[] { "teams", "team_external_ids", "season_teams" }.Any(table =>
+                sql.StartsWith("INSERT INTO football." + table + " ", StringComparison.OrdinalIgnoreCase)));
     }
 }
