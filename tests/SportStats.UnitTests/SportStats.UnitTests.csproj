@@ -16,5 +16,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/SportStats.Api/SportStats.Api.csproj" />
+    <ProjectReference Include="../../tools/SportStats.ProviderValidation/SportStats.ProviderValidation.csproj" />
   </ItemGroup>
 </Project>

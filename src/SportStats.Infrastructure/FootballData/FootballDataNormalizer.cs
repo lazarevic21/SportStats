@@ -9,7 +9,7 @@ namespace SportStats.Infrastructure.FootballData;
 /// Normalizes the observed Premier League contract without generating internal entity IDs.
 /// Scopes describe this importer's boundary, not globally verified provider uniqueness.
 /// </summary>
-public sealed class FootballDataNormalizer : IFootballPayloadNormalizer
+public sealed partial class FootballDataNormalizer : IFootballPayloadNormalizer, IFootballMatchObservationNormalizer
 {
     public const string ProviderKey = "football-data.org";
     private const string CompetitionScope = "competition:PL";

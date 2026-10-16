@@ -17,7 +17,42 @@ public static class DependencyInjection
         ArgumentNullException.ThrowIfNull(configuration);
 
         services.AddSingleton<IFootballPayloadNormalizer, FootballDataNormalizer>();
+        services.AddSingleton<IFootballMatchObservationNormalizer, FootballDataNormalizer>();
+        services.AddFootballDataClient(configuration);
         return services.AddSportStatsDbContext<SportStatsDbContext>(configuration);
+    }
+
+    public static IServiceCollection AddFootballDataClient(this IServiceCollection services, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+        services.Configure<FootballDataOptions>(options =>
+        {
+            var section = configuration.GetSection(FootballDataOptions.SectionName);
+            options.ApiToken = section[nameof(FootballDataOptions.ApiToken)] ?? string.Empty;
+            options.TimeoutSeconds = ReadInteger(section, nameof(FootballDataOptions.TimeoutSeconds), 30);
+            options.MaxResponseBytes = ReadInteger(section, nameof(FootballDataOptions.MaxResponseBytes), 4 * 1024 * 1024);
+        });
+        services.AddHttpClient<IFootballDataClient, FootballDataClient>(client =>
+            client.Timeout = Timeout.InfiniteTimeSpan)
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+                UseCookies = false
+            })
+            .RedactLoggedHeaders(_ => true)
+            .RemoveAllLoggers();
+        return services;
+    }
+
+    private static int ReadInteger(IConfigurationSection section, string key, int defaultValue)
+    {
+        var value = section[key];
+        if (value is null) return defaultValue;
+        if (!int.TryParse(value, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+            throw new InvalidOperationException("FootballData numeric configuration is invalid.");
+        return parsed;
     }
 
     public static IServiceCollection AddSportStatsDbContext<TContext>(this IServiceCollection services,

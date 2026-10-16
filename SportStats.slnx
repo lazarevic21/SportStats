@@ -5,6 +5,9 @@
     <Project Path="src/SportStats.Infrastructure/SportStats.Infrastructure.csproj" />
     <Project Path="src/SportStats.Api/SportStats.Api.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/SportStats.ProviderValidation/SportStats.ProviderValidation.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SportStats.UnitTests/SportStats.UnitTests.csproj" />
     <Project Path="tests/SportStats.IntegrationTests/SportStats.IntegrationTests.csproj" />
