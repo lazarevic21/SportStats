@@ -105,7 +105,7 @@ public sealed class MatchMetadataChangeEvaluator
             changes.Add(new MatchMetadataChange<T>(field, proposed.Presence, before, proposed.Value));
     }
 
-    private static string? Validate(MatchProviderObservation? observation)
+    internal static string? Validate(MatchProviderObservation? observation)
     {
         static bool Identity(ProviderIdentity? x) => x is not null && !string.IsNullOrWhiteSpace(x.ProviderKey) &&
             !string.IsNullOrWhiteSpace(x.IdentityScope) && !string.IsNullOrWhiteSpace(x.ExternalId);
