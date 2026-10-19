@@ -115,7 +115,8 @@ public sealed partial class PostgreSqlTestDatabaseFixture
                     var target = original.Id;
                     if (scenario == InitialImportScenario.AmbiguousMappings)
                     {
-                        var canonicalSeason = await context.Seasons.SingleAsync(x => x.Id == original.SeasonId, token);
+                        var canonicalSeason = await context.Seasons.Include(x => x.Competition).ThenInclude(x => x.Sport)
+                            .SingleAsync(x => x.Id == original.SeasonId, token);
                         var memberships = await context.FootballSeasonTeams.Include(x => x.Team).Where(x => x.SeasonId == original.SeasonId).ToArrayAsync(token);
                         var other = new FootballMatch(Guid.NewGuid(), canonicalSeason, memberships.Single(x => x.TeamId == original.HomeTeamId), memberships.Single(x => x.TeamId == original.AwayTeamId));
                         context.Add(other); target = other.Id;

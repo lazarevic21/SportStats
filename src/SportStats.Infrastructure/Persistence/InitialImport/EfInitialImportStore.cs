@@ -52,6 +52,12 @@ public sealed class EfInitialImportStore(SportStatsDbContext context, TimeSpan? 
     public async Task<InitialImportResult> ApplyAsync(IdentityResolutionBatch batch, CancellationToken cancellationToken = default)
     {
         if (!ApplySafetyVerified) throw new InvalidOperationException("Apply is disabled pending guarded PostgreSQL atomicity verification.");
+        return await ApplyForSafetyVerificationAsync(batch, cancellationToken);
+    }
+
+    // Internal verification seam shares the public lifecycle without enabling the release gate.
+    internal async Task<InitialImportResult> ApplyForSafetyVerificationAsync(IdentityResolutionBatch batch, CancellationToken cancellationToken = default)
+    {
         RequireEmptyTracker();
         if (context.Database.CurrentTransaction is not null) throw new InvalidOperationException("Apply requires ownership of a new transaction.");
         var (snapshot, invalid) = Validate(batch, cancellationToken);

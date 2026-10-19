@@ -4,11 +4,11 @@ Implementation follows the [readiness review](phase-02-9f-initial-import-readine
 This is a one-shot developer tool, separate from API startup. It does not schedule
 work, expose public write endpoints, calculate standings or update canonical metadata.
 
-**Release status: preview implemented; apply implemented behind disabled release
-gates. This phase is not certified for live imports.** Neither guarded-test opt-in
-nor its connection string was available in the verification process. Do not remove
-the CLI gate or `EfInitialImportStore.ApplySafetyVerified` on the strength of offline
-tests. Database identity mapping uniqueness also remains unresolved below.
+**Release status: apply remains disabled; not certified for live imports.**
+The original 74 guarded PostgreSQL cases now pass in the securely configured test
+environment. Additional transaction ownership and identity safeguard verification
+is recorded below. Durable commit/replay has not been executed or approved.
+Neither the CLI gate nor `EfInitialImportStore.ApplySafetyVerified` is enabled.
 
 ## Developer entry point
 
@@ -89,11 +89,21 @@ Natural-key uniqueness protects Sport code, competition sport/code, season paren
 and season membership; foreign keys enforce relationships. PostgreSQL remains the
 final safeguard for those constraints.
 
-External identity indexes are non-unique in the existing schema. They do **not**
-prevent duplicate team or match mappings inserted by uncoordinated writers. Planner
-checks reject duplicate/ambiguous mappings and the cooperative lock serializes known
-writers. Stronger external-identity database uniqueness requires a separately reviewed
-data audit/migration; this phase must not claim that guarantee or silently repair data.
+External identity indexes remain non-unique in the configured database and EF
+model. A read-only, repeatable-read audit found **zero duplicate key groups in
+all four mapping tables**. This describes the audited snapshot, not a reservation
+or a database uniqueness guarantee.
+
+The staged [uniqueness SQL](sql/phase-02-9g-external-identity-uniqueness.sql)
+adds one unique index per table on `(ProviderKey, IdentityScope, ExternalId)`.
+It locks all four tables before re-auditing, rejects duplicates (including identical
+targets), and creates all indexes atomically. It never repairs mappings. Different
+providers/scopes and external aliases for the same target remain allowed. Existing
+foreign keys and lookup indexes remain intact. The script is separate from automatic
+EF migrations; the original migration, snapshot, and legacy ambiguity fixtures retain
+their behavior. It has **not** been applied to permanent tables. Deployment requires
+a reviewed target-specific migration and independent catalog verification. Until
+then uncoordinated writers can still introduce duplicate mappings.
 
 Standings remain outside scope. Other leagues require validated identity scopes,
 payload fixtures and removal of PL-specific checks throughout normalization/planning/
@@ -101,75 +111,111 @@ persistence, not a copied importer or only a different HTTP competition code.
 
 ## Verification
 
-CLI apply must stay disabled unless
-transaction atomicity and database safety have been verified, including guarded live
-PostgreSQL rollback scenarios. Existing fixtures refuse commits, verify the actual
-`sportstats_test`/restricted `sportstats_app` session, and do not create/migrate databases
-or alter permanent rows. Rollback-only replay does not prove durable post-commit replay.
+Final check results for this continuation (2026-10-19):
 
 | Check | Result |
 | --- | --- |
-| Solution build, `dotnet build SportStats.slnx --no-restore` | Passed, zero warnings/errors. |
-| Complete unit suite | 851 passed, zero failed/skipped; 57 new importer cases over the 794 baseline. |
-| Offline integration, `Category!=PostgreSQLLive` | 179 passed, zero failed/skipped. |
-| Guarded PostgreSQL selection, `Category=PostgreSQLLive` | 0 passed, 0 failed, 74 skipped because opt-in was unavailable; includes 10 new importer cases. No database operations executed. |
-| CLI `--apply` smoke check | Refused before requests/database access. |
-| `git diff --check` and new-file whitespace/local-link checks | Passed. |
+| Complete unit suite | 851 passed, 0 failed, 0 skipped. |
+| Offline integration, `Category!=PostgreSQLLive` | 179 passed, 0 failed, 0 skipped. |
+| Guarded PostgreSQL, `Category=PostgreSQLLive` | 82 passed, 0 failed, 0 skipped; original 74 plus 5 transaction-owner and 3 identity safeguard cases. |
+| Solution build, `dotnet build SportStats.slnx --no-restore` | Passed, 0 warnings/errors. |
+| Standalone disposable verification project build | Passed, 0 warnings/errors. |
+| Unapproved durable runner invocation | Refused before database access. |
+| Disposable workflow PowerShell syntax | Passed; workflow not executed. |
+| `git diff --check` | Passed. |
+| Durable commit / post-commit replay | Not executed; explicit user approval required. |
 
-The new guarded scenarios exercise whole-graph preview/creation/replay, metadata
-conflict preservation, duplicate/ambiguous/unmapped identities, a PostgreSQL unique
-competition violation and dangling-reference FK rejection, final-match failure and
-cancellation, and concurrent importer serialization observed through PostgreSQL
-blocking information. Every fixture rolls back; before/after IDs and memberships
-cover all import tables. These scenarios compile and are discovered but remain
-**unexecuted**, so none establishes a live guarantee yet.
-The public apply wrapper delegates its lifecycle to `InitialImportAtomicOperation`;
-eight offline session tests cover commit ordering, conflict rollback/count reset,
-exceptions, cancellation with independent bounded cleanup, begin failure and
-indeterminate commit/rollback outcomes. These verify the actual wrapper decision
-logic, while PostgreSQL transaction ownership and durable completion remain live gates.
+Existing rollback-only
+fixtures still reject commits, use verified restricted `sportstats_test` /
+`sportstats_app` sessions, and never migrate permanent tables. The pre-existing
+scenario fix loading season competition/sport was preserved. No provider calls,
+metadata updates, frontend changes, commits or pushes occurred.
 
-Independent review dispositions:
+The public `ApplyAsync` entry remains blocked by its release gate. Its transaction
+lifecycle is shared with an internal verification entry. Guarded tests exercise
+that lifecycle using the real EF/Npgsql transaction owner, rather than only a fake
+atomic session. They cover late exception, cancellation, returned natural-key
+conflict with zero created counts, rejection of caller-owned transactions, and
+commit refusal with an indeterminate outcome. They assert
+transaction disposal, empty tracking, and all-table rollback. The fixture's commit
+interceptor is retained. Refusal occurs before a server COMMIT; this does not
+certify durable completion or loss of a server commit response. Offline atomic
+session tests continue to cover commit/rollback uncertainty.
 
-| Review | Finding and disposition |
-| --- | --- |
-| QA | Offline checks pass; added full-import tests and corrected late-failure injection to reach the final match mapping. Reviewed root credential/configuration and direct-store boundary tests. Keep apply disabled. |
-| Security | No metadata mutator or credential disclosure found. Requested open-session setting validation and preserving commit uncertainty when rollback fails; both fixed. Nonunique mappings and missing public transaction-owner verification remain release blockers. |
-| Database | Confirmed shared outer transaction and lock retention. Requested all-table rollback assertions and standalone preview coverage; added as guarded cases. Commit-outcome masking fixed and actual wrapper lifecycle extracted for offline testing. PostgreSQL ownership/commit path remains uncertified. |
+The identity safeguard tests use temporary copies of all four actual tables,
+including their original migration indexes. They execute the staged SQL against
+those copies and roll back. Same-target duplicates and conflicting-target inserts
+are rejected with PostgreSQL `23505`; aliases and different providers/scopes remain
+valid. A legacy duplicate aborts the audit before creating indexes. This verifies
+additive compatibility with the original schema without altering permanent tables.
+The existing full-import concurrency case verifies cooperative writer serialization;
+these new conflict cases do not certify cross-session unique-index contention.
 
-Before enabling apply: provide secure guarded test configuration, execute and inspect
-all PostgreSQL cases, add verification of the actual public transaction-owner failure/
-rollback lifecycle without weakening fixture commit refusal, and resolve the requested
-external-identity uniqueness safeguard through a separately reviewed schema/data
-decision. Durable commit/replay certification needs a separately approved disposable
-database workflow; do not turn off the existing fixture guard. A failed or lost commit
-response is indeterminate even if later cleanup fails: the tool claims no success and
-requires a fresh preview before retry. No real provider requests or database
-connections/writes were made during this implementation.
+## Disposable durable verification and release gates
 
-## Changed files
+A separately isolated workflow is implemented under
+[`tools/SportStats.InitialImport.Verification`](../tools/SportStats.InitialImport.Verification/README.md).
+Its README provides the exact approval-gated invocation and limits. It must not be invoked until the
+user explicitly approves disposable database commits. It creates a fresh isolated
+PostgreSQL server and does not accept the guarded suite, development, or production
+connection as its target. Existing rollback-only fixture safeguards are untouched.
 
-- `SportStats.slnx`: adds the developer tool project.
-- `src/SportStats.Application/Football/InitialImport/InitialImportContracts.cs`
-- `src/SportStats.Application/Football/InitialImport/InitialImportFetcher.cs`
-- `src/SportStats.Application/Football/InitialImport/InitialImportValidator.cs`
-- `src/SportStats.Infrastructure/Persistence/InitialImport/EfInitialImportStore.cs`
-- `src/SportStats.Infrastructure/Persistence/InitialImport/InitialImportAtomicOperation.cs`
-- `tools/SportStats.InitialImport/SportStats.InitialImport.csproj`
-- `tools/SportStats.InitialImport/Program.cs`
-- `tools/SportStats.InitialImport/ImportOptions.cs`
-- `tools/SportStats.InitialImport/ImportDatabaseConfiguration.cs`
-- `tests/SportStats.UnitTests/SportStats.UnitTests.csproj`: references the tool.
-- `tests/SportStats.UnitTests/InitialImportConfigurationTests.cs`
-- `tests/SportStats.UnitTests/InitialImportStoreBoundaryTests.cs`
-- `tests/SportStats.UnitTests/InitialImportAtomicOperationTests.cs`
-- `tests/SportStats.UnitTests/InitialImportFetcherTests.cs`
-- `tests/SportStats.UnitTests/InitialImportOptionsTests.cs`
-- `tests/SportStats.UnitTests/InitialImportValidationTests.cs`
-- `tests/SportStats.IntegrationTests/InitialImportPostgreSqlScenarios.cs`
-- `tests/SportStats.IntegrationTests/InitialImportPostgreSqlTests.cs`
-- `docs/phase-02-9g-initial-import.md`: this document.
+The workflow verifies real commit, fresh-session identical replay, stable canonical
+IDs/metadata/memberships, conflicting replay rollback, and staged uniqueness
+safeguards. Building the runner or passing rollback-only tests is not evidence that
+these durable checks passed. Execution remains pending.
 
-The pre-existing untracked `docs/phase-02-9f-initial-import-readiness.md` was read and
-left unchanged. No existing schema, provider normalizer, synchronization policy,
-frontend or API startup behavior changed. No commits or pushes.
+Remaining release blockers:
+
+- Explicit approval and successful isolated durable commit/replay execution.
+- Reviewed deployment of identity uniqueness safeguards and independent verification
+  of all four installed unique indexes on the intended target.
+- Review of the resulting evidence and a separate decision to enable both apply
+  gates. No test opt-in or workflow result automatically enables apply.
+
+A failed or lost commit response remains indeterminate: no success is claimed and
+a fresh preview is required before retrying. No production or development database
+was used for destructive testing. No permanent schema changes were executed.
+
+### Disposable preflight corrections
+
+Both disposable runner contexts now configure
+`MigrationsHistoryTable("__EFMigrationsHistory", "platform")`, matching application
+and design-time configuration. The wrapper rejects `DOCKER_HOST` / `DOCKER_CONTEXT`
+overrides, accepts only `default` / `desktop-linux` contexts with the two explicitly
+allowlisted local Windows Docker named pipes, verifies a Linux daemon, and pins
+the inspected endpoint with `--host` for every container command. TCP, SSH, Unix
+sockets and unknown contexts are rejected. See the workflow README for exact endpoints.
+
+Cleanup verifies the full returned container ID and invocation marker before removal.
+Errors are terminating and visible; no unrelated container deletion or volume pruning
+is attempted. Comments now correctly describe PostgreSQL's anonymous data volume.
+Trusted local Docker Desktop remains a prerequisite. Abrupt termination or ambiguous
+creation output can leave disposable resources requiring manual inspection. Container
+network egress is not blocked by these endpoint checks.
+
+Correction verification: standalone and solution builds passed with zero warnings/errors;
+851 unit and 179 offline integration tests passed, zero failures/skips. Docker preflight
+and cleanup regression checks passed 22 cases using a mocked Docker function,
+never a real daemon. `git diff --check` passed.
+Security and Database specialists reviewed the corrections. Durable verification
+remains unexecuted and requires explicit user approval; both apply gates remain disabled.
+
+## Files changed in this continuation
+
+- `docs/phase-02-9g-initial-import.md`: results, safeguards and release blockers.
+- `docs/sql/phase-02-9g-external-identity-uniqueness.sql`: staged, audit-first uniqueness safeguards.
+- `src/SportStats.Infrastructure/Persistence/InitialImport/EfInitialImportStore.cs`: internal verification entry sharing the gated public lifecycle.
+- `src/SportStats.Infrastructure/Properties/AssemblyInfo.cs`: explicit verification executable friend assembly.
+- `tests/SportStats.IntegrationTests/ExternalIdentityAuditPostgreSqlTests.cs`: read-only data audit and temporary-schema conflict tests.
+- `tests/SportStats.IntegrationTests/InitialImportOwnerPostgreSqlTests.cs`: five actual transaction-owner scenarios.
+- `tests/SportStats.IntegrationTests/SportStats.IntegrationTests.csproj`: embeds staged SQL for verification.
+- `tools/SportStats.InitialImport.Verification/SportStats.InitialImport.Verification.csproj`: standalone verification executable, outside ordinary solution/test discovery.
+- `tools/SportStats.InitialImport.Verification/Program.cs`: guarded disposable migration, uniqueness, durable commit and replay checks.
+- `tools/SportStats.InitialImport.Verification/Verify-DisposableImport.ps1`: explicit-approval fresh-container lifecycle.
+- `tools/SportStats.InitialImport.Verification/README.md`: invocation, isolation and evidence limits.
+
+Pre-existing modified file preserved:
+`tests/SportStats.IntegrationTests/InitialImportPostgreSqlScenarios.cs` loads the
+season's competition/sport navigation in the ambiguous-mapping fixture. This
+continuation did not change that edit.

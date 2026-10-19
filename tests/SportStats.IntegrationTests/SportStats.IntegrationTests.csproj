@@ -17,5 +17,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/SportStats.Api/SportStats.Api.csproj" />
+    <EmbeddedResource Include="../../docs/sql/phase-02-9g-external-identity-uniqueness.sql" LogicalName="ExternalIdentityUniqueness.sql" />
   </ItemGroup>
 </Project>
