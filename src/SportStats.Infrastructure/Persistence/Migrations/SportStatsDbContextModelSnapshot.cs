@@ -263,6 +263,10 @@ namespace SportStats.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("ProviderKey", "IdentityScope", "ExternalId");
 
+                    b.HasIndex(new[] { "ProviderKey", "IdentityScope", "ExternalId" }, "UX_competition_external_ids_identity")
+                        .IsUnique()
+                        .HasDatabaseName("UX_competition_external_ids_identity");
+
                     b.ToTable("competition_external_ids", "platform");
                 });
 
@@ -291,6 +295,10 @@ namespace SportStats.Infrastructure.Persistence.Migrations
                     b.HasIndex("MatchId");
 
                     b.HasIndex("ProviderKey", "IdentityScope", "ExternalId");
+
+                    b.HasIndex(new[] { "ProviderKey", "IdentityScope", "ExternalId" }, "UX_match_external_ids_identity")
+                        .IsUnique()
+                        .HasDatabaseName("UX_match_external_ids_identity");
 
                     b.ToTable("match_external_ids", "football");
                 });
@@ -321,6 +329,10 @@ namespace SportStats.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("ProviderKey", "IdentityScope", "ExternalId");
 
+                    b.HasIndex(new[] { "ProviderKey", "IdentityScope", "ExternalId" }, "UX_team_external_ids_identity")
+                        .IsUnique()
+                        .HasDatabaseName("UX_team_external_ids_identity");
+
                     b.ToTable("team_external_ids", "football");
                 });
 
@@ -349,6 +361,10 @@ namespace SportStats.Infrastructure.Persistence.Migrations
                     b.HasIndex("SeasonId");
 
                     b.HasIndex("ProviderKey", "IdentityScope", "ExternalId");
+
+                    b.HasIndex(new[] { "ProviderKey", "IdentityScope", "ExternalId" }, "UX_season_external_ids_identity")
+                        .IsUnique()
+                        .HasDatabaseName("UX_season_external_ids_identity");
 
                     b.ToTable("season_external_ids", "platform");
                 });

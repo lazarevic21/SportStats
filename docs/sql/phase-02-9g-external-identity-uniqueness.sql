@@ -1,6 +1,6 @@
--- STAGED ONLY. Execute only through a separately reviewed, explicitly approved migration.
+-- HISTORICAL 2.9G VERIFICATION ONLY. Do not deploy this script or run after the 2.9H migration.
 -- Audit the intended target first. Never repair or delete duplicate mappings automatically.
--- This is deliberately separate from EF migrations: legacy ambiguity fixtures retain
+-- Superseded for deployment by EF ExternalIdentityUniqueness; legacy ambiguity fixtures retain
 -- the original schema. A deployed target needs independent post-migration certification.
 BEGIN;
 SET LOCAL lock_timeout = '5s';

@@ -19,4 +19,8 @@
     <ProjectReference Include="../../tools/SportStats.ProviderValidation/SportStats.ProviderValidation.csproj" />
     <ProjectReference Include="../../tools/SportStats.InitialImport/SportStats.InitialImport.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../../tools/SportStats.InitialImport.Verification/DisposableVerificationContract.cs" Link="DisposableVerificationContract.cs" />
+    <Compile Include="../../tools/SportStats.InitialImport.Verification/DisposableMigrationVerification.cs" Link="DisposableMigrationVerification.cs" />
+  </ItemGroup>
 </Project>

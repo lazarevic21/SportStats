@@ -135,5 +135,7 @@ internal static class IdentityConfiguration
         b.ToTable(table, schema); b.HasKey("Id"); b.Property<Guid>("Id").ValueGeneratedNever();
         b.Property<string>("ProviderKey").IsRequired(); b.Property<string>("IdentityScope").IsRequired(); b.Property<string>("ExternalId").IsRequired();
         b.HasIndex("ProviderKey", "IdentityScope", "ExternalId");
+        b.HasIndex(["ProviderKey", "IdentityScope", "ExternalId"], $"UX_{table}_identity")
+            .HasDatabaseName($"UX_{table}_identity").IsUnique();
     }
 }

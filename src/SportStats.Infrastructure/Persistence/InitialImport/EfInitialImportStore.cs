@@ -11,7 +11,7 @@ using SportStats.Infrastructure.Persistence.IdentityResolution;
 namespace SportStats.Infrastructure.Persistence.InitialImport;
 
 /// <summary>Dedicated-context create-only bootstrap. Preview performs only no-tracking SELECTs.
-/// Advisory coordination protects cooperating writers only; external mapping indexes are nonunique.</summary>
+/// Advisory coordination protects cooperating writers; deployed identity unique indexes reject other duplicate inserts.</summary>
 public sealed class EfInitialImportStore(SportStatsDbContext context, TimeSpan? maxLockWait = null) : IInitialImportStore
 {
     private readonly TimeSpan lockWait = maxLockWait ?? TimeSpan.FromSeconds(15);

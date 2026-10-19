@@ -1,5 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using SportStats.Infrastructure.Persistence.Migrations;
 using Npgsql;
 using Xunit;
 
@@ -26,6 +29,21 @@ public sealed class ExternalIdentityAuditPostgreSqlTests
     }
 
     [GuardedPostgreSqlFact]
+    public async Task EfMigrationSafeguardRejectsDuplicateKeysOnActualSchemaCopies()
+    {
+        await using var fixture = await PostgreSqlTestDatabaseFixture.OpenAsync(
+            Environment.GetEnvironmentVariable("SPORTSTATS_TEST_CONNECTION_STRING"));
+        await fixture.VerifyStagedIdentitySafeguardAsync(false, migrationSql: true);
+    }
+
+    [GuardedPostgreSqlFact]
+    public async Task EfMigrationSafeguardRefusesLegacyDuplicatesWithoutRepair()
+    {
+        await using var fixture = await PostgreSqlTestDatabaseFixture.OpenAsync(
+            Environment.GetEnvironmentVariable("SPORTSTATS_TEST_CONNECTION_STRING"));
+        await fixture.VerifyStagedIdentitySafeguardAsync(true, migrationSql: true);
+    }
+    [GuardedPostgreSqlFact]
     public async Task StagedSafeguardRefusesLegacyDuplicatesWithoutRepair()
     {
         await using var fixture = await PostgreSqlTestDatabaseFixture.OpenAsync(
@@ -42,7 +60,7 @@ public sealed partial class PostgreSqlTestDatabaseFixture
         ("football.team_external_ids", "TeamId"), ("football.match_external_ids", "MatchId")
     ];
 
-    public async Task VerifyStagedIdentitySafeguardAsync(bool legacyDuplicates, CancellationToken token = default)
+    public async Task VerifyStagedIdentitySafeguardAsync(bool legacyDuplicates, CancellationToken token = default, bool migrationSql = false)
     {
         ValidateLiveOptIn(Environment.GetEnvironmentVariable("SPORTSTATS_RUN_POSTGRES_TESTS"));
         await VerifyOwnedSessionAsync(token);
@@ -65,6 +83,14 @@ public sealed partial class PostgreSqlTestDatabaseFixture
                 using var reader = new StreamReader(stream);
                 var script = string.Join('\n', (await reader.ReadToEndAsync(token)).Split('\n')
                     .Where(line => line.Trim() is not "BEGIN;" and not "COMMIT;"));
+                if (migrationSql)
+                {
+                    // Execute the real migration operations, keeping the fixture-owned rollback transaction.
+                    // No migration runner or history update is allowed against permanent tables here.
+                    script = string.Join('\n', context.GetService<IMigrationsSqlGenerator>()
+                        .Generate(new ExternalIdentityUniqueness().UpOperations)
+                        .Select(command => command.CommandText));
+                }
                 foreach (var table in IdentityAuditTables)
                 {
                     var temp = "pg_temp." + table.Table.Split('.')[1];
@@ -86,9 +112,16 @@ public sealed partial class PostgreSqlTestDatabaseFixture
                 await Insert("fixture", "scope", "key", target);
                 if (legacyDuplicates)
                 {
+                    await Insert("fixture", "scope", "key", target);
                     await Insert("fixture", "scope", "key", Guid.NewGuid());
+                    await Execute("SAVEPOINT duplicate_audit");
                     var failure = await Assert.ThrowsAsync<PostgresException>(() => Execute(script));
                     Assert.Equal(PostgresErrorCodes.RaiseException, failure.SqlState);
+                    await Execute("ROLLBACK TO SAVEPOINT duplicate_audit");
+                    await using var preserved = new NpgsqlCommand($"SELECT count(*) FROM {tempSubject}", connection, pgTransaction);
+                    Assert.Equal(3L, (long)(await preserved.ExecuteScalarAsync(token))!);
+                    await using var indexes = new NpgsqlCommand("SELECT count(*) FROM pg_catalog.pg_class WHERE relnamespace = pg_my_temp_schema() AND relname LIKE 'UX_%_identity'", connection, pgTransaction);
+                    Assert.Equal(0L, (long)(await indexes.ExecuteScalarAsync(token))!);
                 }
                 else
                 {

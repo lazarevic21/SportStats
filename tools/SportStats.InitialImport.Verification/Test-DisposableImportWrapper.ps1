@@ -3,6 +3,9 @@ $ErrorActionPreference = 'Stop'
 $global:SportStatsWrapperTest_wrapper = Join-Path $PSScriptRoot 'Verify-DisposableImport.ps1'
 $global:SportStatsWrapperTest_endpoint = 'npipe:////./pipe/docker_engine'
 $global:SportStatsWrapperTest_containerId = 'a' * 64
+$global:SportStatsWrapperTest_names = @()
+$global:SportStatsWrapperTest_markers = @()
+$global:SportStatsWrapperTest_passwords = @()
 function docker {
     $global:SportStatsWrapperTest_dockerCalls += ,@($args)
     $global:LASTEXITCODE = 0
@@ -15,8 +18,27 @@ function docker {
         'info' { return 'linux' }
         'run' {
             $global:SportStatsWrapperTest_generatedPassword = $env:POSTGRES_PASSWORD
+            $nameIndex = [Array]::IndexOf($args, '--name')
             $labelIndex = [Array]::IndexOf($args, '--label')
+            $publishIndex = [Array]::IndexOf($args, '--publish')
+            if ($nameIndex -lt 0 -or $labelIndex -lt 0 -or $publishIndex -lt 0) { throw 'Missing disposable identity or port configuration.' }
+            $containerName = $args[$nameIndex + 1]
+            if ($containerName -cnotmatch '^sportstats-import-verification-[a-f0-9]{32}$') { throw 'Unexpected container name.' }
             $global:SportStatsWrapperTest_marker = $args[$labelIndex + 1].Substring('sportstats.disposable-marker='.Length)
+            if ($global:SportStatsWrapperTest_marker -cnotmatch '^[a-f0-9]{32}$' -or
+                $env:POSTGRES_PASSWORD -cnotmatch '^[a-f0-9]{64}$') { throw 'Missing generated isolation credentials.' }
+            if ($global:SportStatsWrapperTest_names -ccontains $containerName -or
+                $global:SportStatsWrapperTest_markers -ccontains $global:SportStatsWrapperTest_marker -or
+                $global:SportStatsWrapperTest_passwords -ccontains $env:POSTGRES_PASSWORD) { throw 'Disposable invocation reused identity or credentials.' }
+            $global:SportStatsWrapperTest_names += $containerName
+            $global:SportStatsWrapperTest_markers += $global:SportStatsWrapperTest_marker
+            $global:SportStatsWrapperTest_passwords += $env:POSTGRES_PASSWORD
+            if ($args[$publishIndex + 1] -cne '127.0.0.1::5432' -or $args -cnotcontains '--rm' -or
+                $args -cnotcontains 'postgres:17.6-bookworm' -or
+                $args -cnotcontains "sportstats.disposable_marker=$global:SportStatsWrapperTest_marker") { throw 'Unpinned image, listener or server marker.' }
+            foreach ($argument in $args) {
+                if ($argument -cmatch '^(--mount|--volume|--volumes-from|--network|--privileged)(=|$)' -or $argument -cmatch '^-v') { throw 'Disposable server must not reuse mounts or host networking.' }
+            }
             return $global:SportStatsWrapperTest_containerId
         }
         'exec' {
@@ -55,6 +77,7 @@ function dotnet {
         $env:SPORTSTATS_DISPOSABLE_APPROVAL -cne 'I APPROVE DISPOSABLE IMPORT COMMITS' -or
         $env:SPORTSTATS_DISPOSABLE_ADMIN_CONNECTION -notlike '*Host=127.0.0.1;Port=15432;Database=sportstats_test;*') { throw 'Runner isolation configuration missing.' }
     $global:SportStatsWrapperTest_generatedConnection = $env:SPORTSTATS_DISPOSABLE_ADMIN_CONNECTION
+    if (!$global:SportStatsWrapperTest_generatedConnection.Contains("Password=$global:SportStatsWrapperTest_generatedPassword;")) { throw 'Runner password differs from fresh container password.' }
     if ($global:SportStatsWrapperTest_scenario -eq 'runner-failure') { $global:LASTEXITCODE = 1 }
 }
 $names = @('DOCKER_HOST', 'DOCKER_CONTEXT', 'POSTGRES_PASSWORD', 'SPORTSTATS_DISPOSABLE_ADMIN_CONNECTION', 'SPORTSTATS_DISPOSABLE_MARKER', 'SPORTSTATS_DISPOSABLE_APPROVAL')

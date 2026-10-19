@@ -1,5 +1,10 @@
 # Phase 2.9G: Developer-controlled PL create-only importer
 
+Current release preparation is recorded in [Phase 2.9H](phase-02-9h-external-identity-release.md),
+which supersedes the historical pending durable-verification and EF uniqueness
+status below. The user reports disposable durable verification passed. The new
+uniqueness migration is prepared but has not been applied; public apply stays disabled.
+
 Implementation follows the [readiness review](phase-02-9f-initial-import-readiness.md).
 This is a one-shot developer tool, separate from API startup. It does not schedule
 work, expose public write endpoints, calculate standings or update canonical metadata.

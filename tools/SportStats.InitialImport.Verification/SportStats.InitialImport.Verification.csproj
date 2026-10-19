@@ -8,6 +8,5 @@
     <AssemblyName>SportStats.InitialImport.Verification</AssemblyName>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../../src/SportStats.Infrastructure/SportStats.Infrastructure.csproj" /></ItemGroup>
-  <ItemGroup><None Include="../../docs/sql/phase-02-9g-external-identity-uniqueness.sql" Link="phase-02-9g-external-identity-uniqueness.sql" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
 </Project>
 

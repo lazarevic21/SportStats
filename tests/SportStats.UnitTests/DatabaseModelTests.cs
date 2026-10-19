@@ -132,7 +132,7 @@ public sealed class DatabaseModelTests
     }
 
     [Fact]
-    public void ProviderIdentitiesUseSeparateTypedForeignKeysAndNonuniqueScopedLookup()
+    public void ProviderIdentitiesUseSeparateTypedForeignKeysAndUniqueScopedIdentity()
     {
         using var context = CreateContext();
         foreach (var (name, target) in new[]
@@ -147,7 +147,7 @@ public sealed class DatabaseModelTests
             Assert.Contains(entity.GetForeignKeys(), fk => fk.PrincipalEntityType.ClrType.Name == target);
             Assert.Contains(entity.GetIndexes(), index => !index.IsUnique && index.Properties.Select(p => p.Name)
                 .SequenceEqual(new[] { "ProviderKey", "IdentityScope", "ExternalId" }));
-            Assert.DoesNotContain(entity.GetIndexes(), index => index.IsUnique && index.Properties.Any(p => p.Name == "ExternalId"));
+            AssertUnique(entity, "ProviderKey", "IdentityScope", "ExternalId");
         }
     }
 

@@ -3,51 +3,28 @@ using Npgsql;
 using SportStats.Application.Football.InitialImport;
 using SportStats.Application.Football.Ingestion;
 using SportStats.Domain.Football;
-using SportStats.Domain.Platform;
+using SportStats.InitialImport.Verification;
 using SportStats.Infrastructure.Persistence;
 using SportStats.Infrastructure.Persistence.InitialImport;
 
-using var verificationTimeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+using var verificationTimeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
 var token = verificationTimeout.Token;
 var stage = "approval-and-configuration";
 // Deliberately separate from the rollback-only fixtures and the CLI. No connection fallback.
 try
 {
-    if (args.Length != 1 || args[0] != "--approved-disposable-commit-replay" ||
-        Environment.GetEnvironmentVariable("SPORTSTATS_DISPOSABLE_APPROVAL") != "I APPROVE DISPOSABLE IMPORT COMMITS")
-        throw new InvalidOperationException();
-    var marker = Environment.GetEnvironmentVariable("SPORTSTATS_DISPOSABLE_MARKER") ?? "";
-    if (!Guid.TryParseExact(marker, "N", out _)) throw new InvalidOperationException();
-    var settings = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("SPORTSTATS_DISPOSABLE_ADMIN_CONNECTION") ?? "");
-    if (settings.Host != "127.0.0.1" || settings.Database != "sportstats_test" || settings.Username != "postgres" || settings.Port == 5432 || !string.IsNullOrEmpty(settings.Options))
-        throw new InvalidOperationException();
-    settings.Pooling = false; settings.Enlist = false; settings.IncludeErrorDetail = false; settings.LogParameters = false; settings.PersistSecurityInfo = false;
-    settings.Timeout = 10; settings.CommandTimeout = 20; settings.CancellationTimeout = 5000;
+    var marker = Environment.GetEnvironmentVariable("SPORTSTATS_DISPOSABLE_MARKER");
+    var settings = DisposableVerificationContract.ValidateConfiguration(args,
+        Environment.GetEnvironmentVariable("SPORTSTATS_DISPOSABLE_APPROVAL"), marker,
+        Environment.GetEnvironmentVariable("SPORTSTATS_DISPOSABLE_ADMIN_CONNECTION"));
     await using var admin = new NpgsqlConnection(settings.ConnectionString);
     stage = "admin-connection";
     await admin.OpenAsync(token);
     stage = "database-isolation-guard";
-    await using (var guard = new NpgsqlCommand("SELECT current_setting('sportstats.disposable_marker', true), (SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN ('platform','football') AND c.relkind IN ('r','p')), current_user, session_user", admin))
+    await using (var guard = new NpgsqlCommand("SELECT current_setting('sportstats.disposable_marker', true), (SELECT count(*) FROM pg_catalog.pg_namespace WHERE nspname IN ('platform','football')), current_user, session_user", admin))
     await using (var reader = await guard.ExecuteReaderAsync(token))
         if (!await reader.ReadAsync(token) || reader.IsDBNull(0) || reader.GetString(0) != marker || reader.GetInt64(1) != 0 || reader.GetString(2) != "postgres" || reader.GetString(3) != "postgres") throw new InvalidOperationException();
-    var adminOptions = new DbContextOptionsBuilder<SportStatsDbContext>()
-        .UseNpgsql(admin, postgres => postgres.MigrationsHistoryTable("__EFMigrationsHistory", "platform")).Options;
-    var sportId = Guid.NewGuid();
-    await using (var setup = new SportStatsDbContext(adminOptions))
-    {
-        stage = "migration";
-        await setup.Database.MigrateAsync(token);
-        stage = "sport-seed";
-        setup.Add(new Sport(sportId, "football", "Football"));
-        await setup.SaveChangesAsync(token);
-    }
-    stage = "uniqueness-script-read";
-    var uniquenessSql = await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "phase-02-9g-external-identity-uniqueness.sql"));
-    stage = "uniqueness-script-apply";
-    await using (var safeguard = new NpgsqlCommand(uniquenessSql, admin)) await safeguard.ExecuteNonQueryAsync(token);
-    stage = "uniqueness-index-verification";
-    await using (var indexes = new NpgsqlCommand("SELECT count(*) FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indexrelid WHERE c.relname IN ('UX_competition_external_ids_identity','UX_season_external_ids_identity','UX_team_external_ids_identity','UX_match_external_ids_identity') AND i.indisunique AND i.indisvalid AND i.indnkeyatts=3 AND (SELECT array_agg(a.attname::text ORDER BY k.ordinality) FROM unnest(i.indkey) WITH ORDINALITY k(attnum, ordinality) JOIN pg_catalog.pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum) = ARRAY['ProviderKey','IdentityScope','ExternalId']", admin))
-        Require((long)(await indexes.ExecuteScalarAsync(token))! == 4);
+    var sportId = await new DisposableMigrationVerification(settings.ConnectionString, marker!, value => stage = value).RunAsync(token);
     // Generated hexadecimal password has no quoting ambiguity and is never printed.
     stage = "application-role-creation";
     var password = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
@@ -98,7 +75,7 @@ try
 catch (Exception exception)
 {
     // Provider exceptions and connection strings must never reach terminal output.
-    // Only fixed classifications and stage constants; never format an exception or its data.
+    // Only fixed classifications, safe diagnostic codes and stage constants.
     var category = exception switch
     {
         OperationCanceledException => "cancelled-or-timeout",
@@ -109,7 +86,7 @@ catch (Exception exception)
         ArgumentException => "invalid-configuration",
         _ => "unexpected-error"
     };
-    Console.Error.WriteLine($"Disposable verification refused or failed at stage '{stage}' ({category}). No release gate was enabled.");
+    Console.Error.WriteLine($"Disposable verification refused or failed at stage '{stage}' ({category}; {DisposableFailureDiagnostics.Describe(exception)}). No release gate was enabled.");
     return 1;
 }
 
