@@ -80,6 +80,37 @@ BEGIN
         UNION ALL (SELECT * FROM actual EXCEPT SELECT * FROM expected)
     ) THEN RAISE EXCEPTION 'Table columns, UUID keys, date/timestamp mappings or nullability differ'; END IF;
 
+    -- PostgreSQL 18 NOT NULL rows must exactly match the nullability established
+    -- above. EXCEPT ALL preserves duplicate rows; generated constraint names vary.
+    IF EXISTS (
+        WITH expected AS (
+            SELECT c.oid AS relation_id,a.attnum AS column_number,
+                   true AS validated,true AS enforced,false AS deferrable,false AS deferred,
+                   true AS is_local,0::smallint AS inherited,false AS no_inherit,0::oid AS parent_id
+            FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
+            WHERE n.nspname IN ('platform','football') AND c.relkind='r' AND a.attnotnull
+        ), actual AS (
+            SELECT c.oid,a.attnum,k.convalidated,k.conenforced,k.condeferrable,k.condeferred,
+                   k.conislocal,k.coninhcount,k.connoinherit,k.conparentid
+            FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid
+            JOIN pg_namespace n ON n.oid=c.relnamespace
+            LEFT JOIN pg_attribute a ON a.attrelid=c.oid AND cardinality(k.conkey)=1
+                AND a.attnum=k.conkey[1] AND a.attnum>0 AND NOT a.attisdropped AND a.attnotnull
+            WHERE n.nspname IN ('platform','football') AND k.contype='n'
+        )
+        (SELECT * FROM expected EXCEPT ALL SELECT * FROM actual)
+        UNION ALL (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)
+    ) THEN RAISE EXCEPTION 'PostgreSQL 18 NOT NULL constraint drift'; END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid
+        JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname IN ('platform','football')
+          AND (NOT k.convalidated OR NOT k.conenforced OR k.condeferrable OR k.condeferred
+               OR NOT k.conislocal OR k.coninhcount<>0 OR k.conparentid<>0)
+    ) THEN RAISE EXCEPTION 'Constraint enforcement or inheritance drift'; END IF;
+
     IF EXISTS (
         WITH expected(schema_name,table_name,constraint_name,kind,definition) AS (VALUES
 ('platform','__EFMigrationsHistory','PK___EFMigrationsHistory','p','PRIMARYKEYMigrationId'),
@@ -241,7 +272,7 @@ SELECT n.nspname AS schema_name,c.relname AS table_name,k.conname,
        k.contype,pg_get_constraintdef(k.oid) AS definition
 FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid
 JOIN pg_namespace n ON n.oid=c.relnamespace
-WHERE n.nspname IN ('platform','football') AND k.contype <> 'n'
+WHERE n.nspname IN ('platform','football')
 ORDER BY 1,2,3;
 SELECT schemaname,tablename,indexname,indexdef FROM pg_indexes
 WHERE schemaname IN ('platform','football') ORDER BY 1,2,3;
