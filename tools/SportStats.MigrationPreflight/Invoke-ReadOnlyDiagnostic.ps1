@@ -2,11 +2,19 @@
 param([switch]$ApproveReadOnlyAudit)
 
 # This switch records separate authorization; it does not obtain authorization.
-$ErrorActionPreference = 'Stop'
+
 if (-not $ApproveReadOnlyAudit) {
-    throw 'Separate explicit read-only audit authorization is required.'
+    [Console]::Out.WriteLine('DIAGNOSTIC|REFUSED|AUTHORIZATION_REQUIRED')
+    exit 1
 }
 
+# Intentionally disabled until private target selection receives separate review.
+# Refuse before location/environment changes, builds, credentials or process launches.
+[Console]::Out.WriteLine('DIAGNOSTIC|REFUSED|RECONFIGURATION_REQUIRED')
+exit 1
+
+# Dormant implementation: retain the original safety/cleanup checks for future review.
+$ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Push-Location -LiteralPath $repositoryRoot
 $secret = $null
@@ -40,7 +48,7 @@ try {
     $secret.Dispose()
     $secret = $null
 
-    dotnet .\tools\SportStats.MigrationPreflight\bin\Debug\net10.0\SportStats.MigrationPreflight.dll --host 127.0.0.1 --port 5432 --database sportstats_test --role sportstats_migrator --expect baseline --system-identifier 7695811824955025708 --approve-read-only-audit
+    dotnet .\tools\SportStats.MigrationPreflight\bin\Debug\net10.0\SportStats.MigrationPreflight.dll --host 127.0.0.1 --port 5432 --database sportstats_test --role sportstats_migrator --expect baseline --system-identifier 'DISABLED_REQUIRES_SEPARATE_REVIEW' --approve-read-only-audit
     if ($LASTEXITCODE -ne 0) { throw 'Audit failed' }
 }
 catch {

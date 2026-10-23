@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using SportStats.Api.Configuration;
+using SportStats.Api.Endpoints;
 using SportStats.Application;
 using SportStats.Infrastructure;
 
@@ -40,6 +41,10 @@ app.MapHealthChecks("/health", new HealthCheckOptions
         context.Response.WriteAsJsonAsync(new { status = report.Status.ToString() },
             cancellationToken: context.RequestAborted)
 });
+
+app.MapCompetitionEndpoints();
+app.MapCompetitionSeasonEndpoints();
+app.MapTeamEndpoints();
 
 app.Run();
 

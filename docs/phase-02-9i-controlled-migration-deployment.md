@@ -6,6 +6,10 @@ import, commit or push is authorized by this document. Public importer `--apply`
 Phase 2.9H disposable PostgreSQL verification, including cleanup; that evidence does
 not establish the state or identity of this existing target.
 
+Privacy note: `<VERIFIED_CLUSTER_SYSTEM_IDENTIFIER>` replaces a private target fingerprint in this historical record. It is documentation only, not a usable approval value. The diagnostic wrapper is intentionally disabled; do not bypass or retarget it. Phase 2.9I remains UNRESOLVED; migration/deployment remain NO-GO.
+
+Current wrapper status: `tools/SportStats.MigrationPreflight/Invoke-ReadOnlyDiagnostic.ps1` intentionally refuses with a fixed message and nonzero exit code, even when its approval switch is supplied. It stops before location/environment changes, builds, credential prompts or process launches. Historical invocation examples below remain non-operational. Reconfiguration of private target selection requires separate review and authorization; no live use is authorized.
+
 ## Target and approval boundary
 
 The only supported target is an independently confirmed **nonproduction** database
@@ -235,7 +239,7 @@ pushes were made.
 
 The operator independently confirmed nonproduction endpoint `127.0.0.1:5432`,
 `sportstats_test`, role `sportstats_migrator`, and cluster identifier
-`7695811824955025708`. This supersedes the earlier identity-unconfirmed preparation
+`<VERIFIED_CLUSTER_SYSTEM_IDENTIFIER>`. This supersedes the earlier identity-unconfirmed preparation
 status above. The operator reports that build succeeded and the original preflight
 failed with its generic suppressed-error message. That message provides no evidence
 of which guard failed. No successful audit or deployment is established.
@@ -400,7 +404,7 @@ strict rejection and unchanged read-only guarantees; neither connected to Postgr
 
 Obtain explicit authorization for one read-only baseline diagnostic of
 `127.0.0.1:5432`, database `sportstats_test`, role `sportstats_migrator`, independently
-verified nonproduction cluster `7695811824955025708`. Retain the existing private,
+verified nonproduction cluster `<VERIFIED_CLUSTER_SYSTEM_IDENTIFIER>`. Retain the existing private,
 non-transcribed shell and secure password procedure described above. Then run:
 
 ```powershell
@@ -439,7 +443,7 @@ fields. Database, current role, session role, port, transaction read-only state
 and cluster system identifier retain independent exact checks before any catalog
 reads. Startup read-only settings, explicit repeatable-read read-only transaction,
 rollback, bounded timeouts and connection restrictions are unchanged. The expected
-cluster remains `7695811824955025708`. No database privilege, schema or data changes
+cluster remains `<VERIFIED_CLUSTER_SYSTEM_IDENTIFIER>`. No database privilege, schema or data changes
 are part of this fix.
 
 Null and malformed fields reject; unexpected provider/type conversions propagate
@@ -479,7 +483,7 @@ PostgreSQL or changed files. No unresolved implementation findings remain.
 
 Obtain explicit separate authorization for one audit of `127.0.0.1:5432`, database
 `sportstats_test`, role `sportstats_migrator`, baseline history, and independently
-verified nonproduction cluster `7695811824955025708`. Use the private,
+verified nonproduction cluster `<VERIFIED_CLUSTER_SYSTEM_IDENTIFIER>`. Use the private,
 non-transcribed shell and secure password procedure already documented above.
 Only after that authorization, run:
 
@@ -592,7 +596,7 @@ These tests do not certify PostgreSQL/Npgsql round trips.
 
 Obtain separate explicit authorization for one read-only baseline audit of
 127.0.0.1:5432, sportstats_test, sportstats_migrator, independently verified
-nonproduction cluster 7695811824955025708. Use the private non-transcribed shell
+nonproduction cluster `<VERIFIED_CLUSTER_SYSTEM_IDENTIFIER>`. Use the private non-transcribed shell
 and secure password procedure above. Only after authorization, run:
 
 ```powershell
@@ -690,7 +694,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Read-only baseline audit blocked; report only 
 ```
 
 The wrapper pins 127.0.0.1:5432, sportstats_test, sportstats_migrator, baseline
-history and cluster 7695811824955025708. It builds before credentials, uses the
+history and cluster `<VERIFIED_CLUSTER_SYSTEM_IDENTIFIER>`. It builds before credentials, uses the
 bounded read-only preflight and clears process credentials afterward. On failure,
 stop without automatic retry, bypass or raw-error capture. This task did not
 modify the database, apply migrations, enable importer --apply, commit or push.

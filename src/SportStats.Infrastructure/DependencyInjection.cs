@@ -2,11 +2,15 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using SportStats.Application.Football.Ingestion;
+using SportStats.Application.Competitions;
 using SportStats.Application.Football.MatchMetadata;
+using SportStats.Application.Football.Teams;
 using SportStats.Infrastructure.Configuration;
 using SportStats.Infrastructure.FootballData;
 using SportStats.Infrastructure.Persistence;
+using SportStats.Infrastructure.Persistence.Competitions;
 using SportStats.Infrastructure.Persistence.MatchMetadata;
+using SportStats.Infrastructure.Persistence.Teams;
 
 namespace SportStats.Infrastructure;
 
@@ -22,6 +26,9 @@ public static class DependencyInjection
         services.AddSingleton<IFootballMatchObservationNormalizer, FootballDataNormalizer>();
         services.AddSingleton<MatchMetadataChangeEvaluator>();
         services.AddScoped<IMatchMetadataIdentityReader, EfMatchMetadataIdentityReader>();
+        services.AddScoped<ICompetitionReader, EfCompetitionReader>();
+        services.AddScoped<ICompetitionSeasonReader, EfCompetitionSeasonReader>();
+        services.AddScoped<ITeamReader, EfTeamReader>();
         services.AddScoped<IMatchMetadataEvaluationService, MatchMetadataEvaluationService>();
         services.AddFootballDataClient(configuration);
         return services.AddSportStatsDbContext<SportStatsDbContext>(configuration);

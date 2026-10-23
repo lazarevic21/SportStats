@@ -82,9 +82,11 @@ Only the Tech Lead coordinates commits, merges, and pushes. Confirmation is requ
 
 ## Local development
 
-Install the .NET SDK specified by `global.json`, then follow [backend setup](docs/backend-setup.md) to restore, build, test, and run the health endpoint. Follow [database documentation](docs/database.md) for secure persistence configuration, the applied migration state, and remaining provider decisions. Provider access, resource endpoints, and authentication remain future work.
+Install the .NET SDK specified by `global.json`, then follow [backend setup](docs/backend-setup.md) for the original setup workflow. Read-only [GET /api/competitions](docs/competitions-api.md) and [GET /api/competitions/{competitionId}/seasons](docs/competition-seasons-api.md) are implemented with offline unit/API verification. Their PostgreSQL execution remains unvalidated; `/health` remains database-independent. Earlier setup/database documents describe historical milestones. The Phase 2.9I access-boundary finding remains UNRESOLVED, and migration/deployment remain NO-GO. Live database access, configuration and provisioning require separate authorization.
 
 ## Longer-term roadmap
+
+Read-only [GET /api/teams](docs/teams-api.md) adds bounded football-team identity responses with offline verification. Competition filtering is deferred to an explicitly defined season-membership query; unsupported filters are rejected. No live database authorization is added.
 
 - What If? League Simulator
 - Smart Match Analysis
