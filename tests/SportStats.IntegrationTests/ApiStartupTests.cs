@@ -121,7 +121,7 @@ public sealed class ApiStartupTests
         using var factory = CreateFactory("SportStats tests");
         using var client = factory.CreateClient(ClientOptions());
 
-        using var response = await client.GetAsync("/api/matches");
+        using var response = await client.GetAsync("/api/not-a-route");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }

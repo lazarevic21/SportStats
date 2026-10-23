@@ -88,6 +88,10 @@ Install the .NET SDK specified by `global.json`, then follow [backend setup](doc
 
 Read-only [GET /api/teams](docs/teams-api.md) adds bounded football-team identity responses with offline verification. Competition filtering is deferred to an explicitly defined season-membership query; unsupported filters are rejected. No live database authorization is added.
 
+Read-only [GET /api/matches](docs/matches-api.md) adds bounded match details with optional season, team and UTC date filters. Phase 2.9I remains unresolved; migration and deployment remain NO-GO.
+
+Read-only [GET /api/seasons/{seasonId}/standings](docs/standings-api.md) returns a bounded page of ranks and teams from the season's latest persisted standings snapshot, with its source metadata.
+
 - What If? League Simulator
 - Smart Match Analysis
 - Team DNA

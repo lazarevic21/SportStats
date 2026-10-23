@@ -5,12 +5,16 @@ using SportStats.Application.Football.Ingestion;
 using SportStats.Application.Competitions;
 using SportStats.Application.Football.MatchMetadata;
 using SportStats.Application.Football.Teams;
+using SportStats.Application.Football.Matches;
+using SportStats.Application.Football.Standings;
 using SportStats.Infrastructure.Configuration;
 using SportStats.Infrastructure.FootballData;
 using SportStats.Infrastructure.Persistence;
 using SportStats.Infrastructure.Persistence.Competitions;
 using SportStats.Infrastructure.Persistence.MatchMetadata;
 using SportStats.Infrastructure.Persistence.Teams;
+using SportStats.Infrastructure.Persistence.Matches;
+using SportStats.Infrastructure.Persistence.Standings;
 
 namespace SportStats.Infrastructure;
 
@@ -29,6 +33,8 @@ public static class DependencyInjection
         services.AddScoped<ICompetitionReader, EfCompetitionReader>();
         services.AddScoped<ICompetitionSeasonReader, EfCompetitionSeasonReader>();
         services.AddScoped<ITeamReader, EfTeamReader>();
+        services.AddScoped<IMatchReader, EfMatchReader>();
+        services.AddScoped<IStandingsReader, EfStandingsReader>();
         services.AddScoped<IMatchMetadataEvaluationService, MatchMetadataEvaluationService>();
         services.AddFootballDataClient(configuration);
         return services.AddSportStatsDbContext<SportStatsDbContext>(configuration);

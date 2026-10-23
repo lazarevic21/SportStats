@@ -45,6 +45,8 @@ app.MapHealthChecks("/health", new HealthCheckOptions
 app.MapCompetitionEndpoints();
 app.MapCompetitionSeasonEndpoints();
 app.MapTeamEndpoints();
+app.MapMatchEndpoints();
+app.MapStandingsEndpoints();
 
 app.Run();
 
